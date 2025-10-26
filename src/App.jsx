@@ -25,6 +25,7 @@ export default function App() {
   });
   const [newUserName, setNewUserName] = useState("");
   const [exportRange, setExportRange] = useState("daily");
+  const [selectedBreaks, setSelectedBreaks] = useState({}); // store selected break per user
 
   // Fetch teams/users safely
   const fetchTeams = async () => {
@@ -47,8 +48,9 @@ export default function App() {
   }, []);
 
   // Punch In/Out
-  const punch = async (user, breakType) => {
+  const punch = async (user) => {
     try {
+      const breakType = selectedBreaks[user.id] || null;
       const now = new Date().toISOString();
       const updated = {
         last_punch: now,
@@ -195,7 +197,7 @@ export default function App() {
           </thead>
           <tbody>
             {teams.map((user, idx) => {
-              const isLongBreak = (user.daily_break_seconds || 0) >= 3600; // 1h
+              const isLongBreak = (user.daily_break_seconds || 0) >= 3600;
               return (
                 <tr
                   key={user.id}
@@ -215,11 +217,16 @@ export default function App() {
                   )}
                   <td>
                     <select
-                      onChange={(e) => punch(user, e.target.value)}
-                      defaultValue=""
+                      value={selectedBreaks[user.id] || ""}
+                      onChange={(e) =>
+                        setSelectedBreaks({
+                          ...selectedBreaks,
+                          [user.id]: e.target.value,
+                        })
+                      }
                     >
                       <option value="" disabled>
-                        ⏱ Punch In/Out
+                        Select Break
                       </option>
                       {BREAK_TYPES.map((b) => (
                         <option key={b.value} value={b.value}>
@@ -227,6 +234,12 @@ export default function App() {
                         </option>
                       ))}
                     </select>
+                    <button
+                      onClick={() => punch(user)}
+                      style={{ marginLeft: "5px" }}
+                    >
+                      ⏱ Punch
+                    </button>
                   </td>
                 </tr>
               );

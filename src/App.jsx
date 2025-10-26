@@ -3,7 +3,6 @@ import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = "https://ulgagdsllwkqxluakifk.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk";
-
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Admin secret for generic login

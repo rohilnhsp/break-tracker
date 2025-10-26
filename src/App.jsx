@@ -1,266 +1,226 @@
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-// Initialize Supabase
 const supabaseUrl = "https://ulgagdsllwkqxluakifk.supabase.co";
 const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk";
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-export default function App() {
+function formatDuration(seconds) {
+  const h = String(Math.floor(seconds / 3600)).padStart(2, "0");
+  const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
+  const s = String(seconds % 60).padStart(2, "0");
+  return `${h}:${m}:${s}`;
+}
+
+function App() {
   const [teams, setTeams] = useState([]);
   const [user, setUser] = useState(null);
-  const [loadingUser, setLoadingUser] = useState(true);
-  const [newUserEmail, setNewUserEmail] = useState("");
-  const [newUserRole, setNewUserRole] = useState("user");
-  const [exportType, setExportType] = useState("day");
+  const [loading, setLoading] = useState(true);
 
-  const timersRef = useRef({});
+  const intervalRef = useRef();
 
   // Fetch logged-in user
   useEffect(() => {
-    const fetchUser = async () => {
-      const { data: session } = await supabase.auth.getSession();
-      if (session?.session?.user) {
-        const { data: userData } = await supabase
-          .from("users")
-          .select("*")
-          .eq("id", session.session.user.id)
-          .single();
-        setUser(userData);
-      }
-      setLoadingUser(false);
+    const getUser = async () => {
+      const { data: { user }, error } = await supabase.auth.getUser();
+      if (error) console.error(error);
+      else setUser(user);
+      setLoading(false);
     };
-    fetchUser();
+    getUser();
   }, []);
 
   // Fetch teams
-  const fetchTeams = async () => {
-    const { data, error } = await supabase.from("teams").select("*");
-    if (error) console.error("Error fetching teams:", error);
-    else setTeams(data || []);
-  };
-
   useEffect(() => {
+    const fetchTeams = async () => {
+      const { data, error } = await supabase.from("teams").select("*");
+      if (error) console.error(error);
+      else setTeams(data);
+    };
     fetchTeams();
 
-    // Real-time subscription
+    // Subscribe to real-time updates
     const subscription = supabase
       .channel("public:teams")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "teams" },
         (payload) => {
-          fetchTeams();
+          setTeams((prev) =>
+            prev.map((t) => (t.id === payload.new.id ? payload.new : t))
+          );
         }
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(subscription);
-    };
+    return () => supabase.removeChannel(subscription);
   }, []);
 
-  // Live HH:MM:SS timer for breaks
+  // Live timers update
   useEffect(() => {
-    const interval = setInterval(() => {
-      setTeams((prevTeams) =>
-        prevTeams.map((team) => {
-          if (team.break_start && !team.break_end) {
-            const start = new Date(team.break_start);
-            const diff = Math.floor((Date.now() - start.getTime()) / 1000);
-            team.duration = diff; // seconds
+    intervalRef.current = setInterval(() => {
+      setTeams((prev) =>
+        prev.map((t) => {
+          if (t.break_start && !t.break_end) {
+            const start = new Date(t.break_start);
+            const seconds = Math.floor((Date.now() - start) / 1000);
+            return { ...t, liveDuration: seconds };
           }
-          return team;
+          return { ...t, liveDuration: 0 };
         })
       );
     }, 1000);
 
-    return () => clearInterval(interval);
+    return () => clearInterval(intervalRef.current);
   }, []);
 
-  const formatTimer = (seconds) => {
-    if (!seconds) return "00:00:00";
-    const h = Math.floor(seconds / 3600)
-      .toString()
-      .padStart(2, "0");
-    const m = Math.floor((seconds % 3600) / 60)
-      .toString()
-      .padStart(2, "0");
-    const s = Math.floor(seconds % 60)
-      .toString()
-      .padStart(2, "0");
-    return `${h}:${m}:${s}`;
-  };
-
-  // Punch In / Out
   const handlePunch = async (team) => {
-  try {
-    const now = new Date().toISOString();
-    const updates =
-      !team.break_start || team.break_end
-        ? { break_start: now, break_end: null }
-        : { break_end: now };
-
-    const { data, error } = await supabase
-      .from("teams")
-      .update(updates)
-      .eq("id", team.id)
-      .select(); // <--- important
-
-    if (error) throw error;
-
-    // Update local state immediately
-    setTeams((prev) =>
-      prev.map((t) => (t.id === team.id ? { ...t, ...data[0] } : t))
-    );
-  } catch (err) {
-    console.error("Error updating break:", err);
-    alert("Failed to update break");
-  }
-};
-
-  // Add user
-  const handleAddUser = async () => {
-    if (!newUserEmail) return alert("Enter email");
-
     try {
-      const { error } = await supabase
-        .from("users")
-        .insert([{ email: newUserEmail, role: newUserRole }]);
+      const now = new Date().toISOString();
+      const updates =
+        !team.break_start || team.break_end
+          ? { break_start: now, break_end: null }
+          : { break_end: now };
+
+      const { data, error } = await supabase
+        .from("teams")
+        .update(updates)
+        .eq("id", team.id)
+        .select(); // important to return updated row
 
       if (error) throw error;
 
-      alert("User added successfully");
-      setNewUserEmail("");
-      setNewUserRole("user");
+      // Update local state immediately
+      setTeams((prev) =>
+        prev.map((t) => (t.id === team.id ? { ...t, ...data[0] } : t))
+      );
     } catch (err) {
-      console.error("Error adding user:", err);
-      alert("Failed to add user");
+      console.error("Error updating break:", err);
+      alert("Failed to update break");
     }
   };
 
   // CSV Export
-  const handleExport = () => {
-    const header = ["Name", "Email", "Break Start", "Break End", "Duration"];
-    const rows = teams.map((team) => [
-      team.name,
-      team.email,
-      team.break_start || "",
-      team.break_end || "",
-      formatTimer(team.duration || 0),
-    ]);
+  const exportCSV = (filter = "all") => {
+    let filteredTeams = teams;
 
-    const csvContent =
-      "data:text/csv;charset=utf-8," +
-      [header.join(","), ...rows.map((r) => r.join(","))].join("\n");
+    const now = new Date();
+    if (filter === "daily") {
+      filteredTeams = teams.filter(
+        (t) =>
+          t.break_start &&
+          new Date(t.break_start).toDateString() === now.toDateString()
+      );
+    } else if (filter === "weekly") {
+      const weekStart = new Date();
+      weekStart.setDate(now.getDate() - now.getDay());
+      filteredTeams = teams.filter(
+        (t) =>
+          t.break_start &&
+          new Date(t.break_start) >= weekStart
+      );
+    } else if (filter === "monthly") {
+      filteredTeams = teams.filter(
+        (t) =>
+          t.break_start &&
+          new Date(t.break_start).getMonth() === now.getMonth() &&
+          new Date(t.break_start).getFullYear() === now.getFullYear()
+      );
+    }
 
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = [
+      ["Name", "Email", "Break Start", "Break End", "Duration (HH:MM:SS)"],
+      ...filteredTeams.map((t) => [
+        t.name,
+        t.email,
+        t.break_start || "",
+        t.break_end || "",
+        t.liveDuration ? formatDuration(t.liveDuration) : ""
+      ])
+    ]
+      .map((e) => e.join(","))
+      .join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute(
-      "download",
-      `breaks_${exportType}_${new Date().toISOString()}.csv`
-    );
+    link.href = URL.createObjectURL(blob);
+    link.setAttribute("download", "breaks_export.csv");
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  if (loadingUser) return <div>Loading user...</div>;
+  if (loading) return <div className="p-6">Loading user...</div>;
+
+  const isAdmin = user?.role === "admin" || user?.role === "manager";
 
   return (
-    <div className="p-6 font-sans">
+    <div className="p-6">
       <h1 className="text-2xl font-bold mb-4">Team Break Dashboard</h1>
 
-      {user?.role === "admin" && (
-        <div className="mb-6 p-4 border rounded">
-          <h2 className="font-semibold mb-2">Add User</h2>
-          <input
-            type="email"
-            placeholder="User Email"
-            value={newUserEmail}
-            onChange={(e) => setNewUserEmail(e.target.value)}
-            className="border p-2 rounded mr-2"
-          />
-          <select
-            value={newUserRole}
-            onChange={(e) => setNewUserRole(e.target.value)}
-            className="border p-2 rounded mr-2"
-          >
-            <option value="user">User</option>
-            <option value="manager">Manager</option>
-            <option value="admin">Admin</option>
-          </select>
+      {isAdmin && (
+        <div className="mb-4 flex gap-2">
           <button
-            onClick={handleAddUser}
-            className="bg-blue-500 text-white px-3 py-1 rounded"
+            className="bg-blue-500 text-white px-4 py-2 rounded"
+            onClick={() => exportCSV("daily")}
           >
-            Add
+            Export Daily
           </button>
-        </div>
-      )}
-
-      {(user?.role === "admin" || user?.role === "manager") && (
-        <div className="mb-6 flex items-center space-x-2">
-          <select
-            value={exportType}
-            onChange={(e) => setExportType(e.target.value)}
-            className="border p-2 rounded"
-          >
-            <option value="day">Day</option>
-            <option value="week">Week</option>
-            <option value="month">Month</option>
-          </select>
           <button
-            onClick={handleExport}
-            className="bg-green-500 text-white px-3 py-1 rounded"
+            className="bg-blue-500 text-white px-4 py-2 rounded"
+            onClick={() => exportCSV("weekly")}
           >
-            Export CSV
+            Export Weekly
+          </button>
+          <button
+            className="bg-blue-500 text-white px-4 py-2 rounded"
+            onClick={() => exportCSV("monthly")}
+          >
+            Export Monthly
           </button>
         </div>
       )}
 
       <table className="min-w-full border border-gray-300">
-        <thead>
-          <tr className="bg-gray-200">
-            <th className="p-2 border">Name</th>
-            <th className="p-2 border">Email</th>
-            <th className="p-2 border">On Break</th>
-            <th className="p-2 border">Break Duration</th>
-            <th className="p-2 border">Action</th>
+        <thead className="bg-gray-200">
+          <tr>
+            <th className="border px-2 py-1">Name</th>
+            <th className="border px-2 py-1">Email</th>
+            <th className="border px-2 py-1">On Break</th>
+            <th className="border px-2 py-1">Break Duration</th>
+            <th className="border px-2 py-1">Action</th>
           </tr>
         </thead>
         <tbody>
           {teams.map((team) => {
             const onBreak = team.break_start && !team.break_end;
-            const highlight = team.duration > 15 * 60; // highlight > 15 mins
+            const duration = team.liveDuration || 0;
+            const longBreak = duration > 30 * 60; // highlight if more than 30 mins
 
             return (
               <tr
                 key={team.id}
-                className={highlight ? "bg-red-100" : ""}
+                className={longBreak ? "bg-red-100" : ""}
               >
-                <td className="p-2 border">{team.name}</td>
-                <td className="p-2 border">{team.email}</td>
-                <td className="p-2 border">
+                <td className="border px-2 py-1">{team.name}</td>
+                <td className="border px-2 py-1">{team.email}</td>
+                <td className="border px-2 py-1">
                   {onBreak ? (
                     <span className="bg-yellow-200 px-2 py-1 rounded">
                       Yes
                     </span>
                   ) : (
-                    <span className="bg-green-200 px-2 py-1 rounded">
-                      No
-                    </span>
+                    <span className="bg-green-200 px-2 py-1 rounded">No</span>
                   )}
                 </td>
-                <td className="p-2 border">
-                  {formatTimer(team.duration || 0)}
-                </td>
-                <td className="p-2 border">
+                <td className="border px-2 py-1">{formatDuration(duration)}</td>
+                <td className="border px-2 py-1">
                   <button
+                    className={`px-2 py-1 rounded ${
+                      onBreak ? "bg-red-500 text-white" : "bg-green-500 text-white"
+                    }`}
                     onClick={() => handlePunch(team)}
-                    className="bg-blue-500 text-white px-3 py-1 rounded"
                   >
                     {onBreak ? "Punch Out" : "Punch In"}
                   </button>
@@ -273,3 +233,5 @@ export default function App() {
     </div>
   );
 }
+
+export default App;

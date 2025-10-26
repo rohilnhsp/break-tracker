@@ -40,9 +40,9 @@ function App() {
   };
 
   // Compute live break duration in minutes
-  const computeDuration = (team) => {
-    if (!team.on_break || !team.break_start) return 0;
-    const start = new Date(team.break_start);
+  const computeDuration = (breakStart) => {
+    if (!breakStart) return 0;
+    const start = new Date(breakStart);
     const now = new Date();
     return Math.floor((now - start) / 1000 / 60);
   };
@@ -51,21 +51,51 @@ function App() {
   useEffect(() => {
     fetchTeams();
 
-    // Subscribe to changes in 'teams' table
     const subscription = supabase
       .channel("public:teams")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "teams" },
         (payload) => {
-          fetchTeams(); // Refresh teams on any insert, update, delete
+          // Update only the affected team locally for live updates
+          setTeams((prev) => {
+            const updatedTeam = payload.new;
+            const index = prev.findIndex((t) => t.id === updatedTeam.id);
+
+            if (index !== -1) {
+              const newTeams = [...prev];
+              newTeams[index] = updatedTeam;
+              return newTeams;
+            } else if (payload.eventType === "INSERT") {
+              return [...prev, updatedTeam];
+            } else if (payload.eventType === "DELETE") {
+              return prev.filter((t) => t.id !== payload.old.id);
+            }
+            return prev;
+          });
         }
       )
       .subscribe();
 
     return () => {
-      supabase.removeChannel(subscription); // Clean up subscription on unmount
+      supabase.removeChannel(subscription);
     };
+  }, []);
+
+  // Live duration update every second
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTeams((prev) =>
+        prev.map((team) => {
+          if (team.on_break && team.break_start) {
+            return { ...team }; // triggers re-render
+          }
+          return team;
+        })
+      );
+    }, 1000);
+
+    return () => clearInterval(interval);
   }, []);
 
   if (loading) return <p className="p-4">Loading teams...</p>;
@@ -90,12 +120,16 @@ function App() {
               <td className="border px-4 py-2">{team.name}</td>
               <td className="border px-4 py-2">{team.email}</td>
               <td className="border px-4 py-2">{team.on_break ? "Yes" : "No"}</td>
-              <td className="border px-4 py-2">{computeDuration(team)}</td>
+              <td className="border px-4 py-2">
+                {computeDuration(team.break_start)}
+              </td>
               <td className="border px-4 py-2">
                 <button
                   onClick={() => toggleBreak(team)}
                   className={`px-3 py-1 rounded ${
-                    team.on_break ? "bg-red-500 text-white" : "bg-green-500 text-white"
+                    team.on_break
+                      ? "bg-red-500 text-white"
+                      : "bg-green-500 text-white"
                   }`}
                 >
                   {team.on_break ? "Punch Out" : "Punch In"}

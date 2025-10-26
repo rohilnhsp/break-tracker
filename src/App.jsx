@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 // ---- Supabase Client ----
-import { createClient } from "@supabase/supabase-js";
 const supabaseUrl = "https://ulgagdsllwkqxluakifk.supabase.co";
 const anonKey =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk";
@@ -13,7 +13,7 @@ const GENERIC_ADMIN = { username: "admin", password: "admin123" };
 const App = () => {
   const [teams, setTeams] = useState([]);
   const [adminLogged, setAdminLogged] = useState(false);
-  const [adminLogin, setAdminLogin] = useState({ username: "", password: "" }));
+  const [adminLogin, setAdminLogin] = useState({ username: "", password: "" });
   const [exportDateRange, setExportDateRange] = useState("daily");
 
   // Fetch teams
@@ -25,10 +25,13 @@ const App = () => {
 
   useEffect(() => {
     fetchTeams();
-    // Real-time subscription
     const subscription = supabase
       .channel("table_teams")
-      .on("postgres_changes", { event: "*", schema: "public", table: "teams" }, fetchTeams)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "teams" },
+        fetchTeams
+      )
       .subscribe();
 
     return () => {
@@ -36,7 +39,7 @@ const App = () => {
     };
   }, []);
 
-  // Punch in/out with daily break accumulation
+  // Punch in/out
   const handlePunch = async (team) => {
     const now = new Date();
     if (team.break_start && !team.break_end) {
@@ -64,7 +67,7 @@ const App = () => {
     }
   };
 
-  // Calculate live HH:MM:SS for display
+  // Live HH:MM:SS
   const getLiveBreak = (team) => {
     let total = team.daily_break_seconds || 0;
     if (team.break_start && !team.break_end) {
@@ -77,13 +80,16 @@ const App = () => {
   };
 
   useEffect(() => {
-    const interval = setInterval(fetchTeams, 1000); // live update every second
+    const interval = setInterval(fetchTeams, 1000);
     return () => clearInterval(interval);
   }, []);
 
   // Admin login
   const loginAdmin = () => {
-    if (adminLogin.username === GENERIC_ADMIN.username && adminLogin.password === GENERIC_ADMIN.password) {
+    if (
+      adminLogin.username === GENERIC_ADMIN.username &&
+      adminLogin.password === GENERIC_ADMIN.password
+    ) {
       setAdminLogged(true);
       setAdminLogin({ username: "", password: "" });
     } else {
@@ -132,17 +138,24 @@ const App = () => {
             type="text"
             placeholder="Username"
             value={adminLogin.username}
-            onChange={(e) => setAdminLogin({ ...adminLogin, username: e.target.value })}
+            onChange={(e) =>
+              setAdminLogin({ ...adminLogin, username: e.target.value })
+            }
             className="border p-1 w-full mb-1"
           />
           <input
             type="password"
             placeholder="Password"
             value={adminLogin.password}
-            onChange={(e) => setAdminLogin({ ...adminLogin, password: e.target.value })}
+            onChange={(e) =>
+              setAdminLogin({ ...adminLogin, password: e.target.value })
+            }
             className="border p-1 w-full mb-1"
           />
-          <button onClick={loginAdmin} className="bg-blue-500 text-white px-2 py-1 rounded">
+          <button
+            onClick={loginAdmin}
+            className="bg-blue-500 text-white px-2 py-1 rounded"
+          >
             Login
           </button>
         </div>
@@ -151,9 +164,22 @@ const App = () => {
       {/* Admin Actions */}
       {adminLogged && (
         <div className="mb-4 space-x-2">
-          <button onClick={addUser} className="bg-green-500 text-white px-2 py-1 rounded">Add User</button>
-          <button onClick={exportCSV} className="bg-blue-500 text-white px-2 py-1 rounded">Export CSV</button>
-          <select onChange={(e) => setExportDateRange(e.target.value)} value={exportDateRange}>
+          <button
+            onClick={addUser}
+            className="bg-green-500 text-white px-2 py-1 rounded"
+          >
+            Add User
+          </button>
+          <button
+            onClick={exportCSV}
+            className="bg-blue-500 text-white px-2 py-1 rounded"
+          >
+            Export CSV
+          </button>
+          <select
+            onChange={(e) => setExportDateRange(e.target.value)}
+            value={exportDateRange}
+          >
             <option value="daily">Daily</option>
             <option value="weekly">Weekly</option>
             <option value="monthly">Monthly</option>
@@ -183,7 +209,9 @@ const App = () => {
                 <td className="border p-1">
                   <button
                     onClick={() => handlePunch(team)}
-                    className={`px-2 py-1 rounded ${ongoing ? "bg-red-500 text-white" : "bg-green-500 text-white"}`}
+                    className={`px-2 py-1 rounded ${
+                      ongoing ? "bg-red-500 text-white" : "bg-green-500 text-white"
+                    }`}
                   >
                     {ongoing ? "Punch Out" : "Punch In"}
                   </button>

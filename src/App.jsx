@@ -1,163 +1,148 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
-import dayjs from "dayjs";
-import relativeTime from "dayjs/plugin/relativeTime";
-dayjs.extend(relativeTime);
 
-// Supabase client
 const supabaseUrl = "https://ulgagdsllwkqxluakifk.supabase.co";
 const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk";
+
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const LONG_BREAK_MINUTES = 10; // highlight threshold in minutes
+// Long break threshold in seconds (e.g., 15 mins = 900s)
+const LONG_BREAK_THRESHOLD = 15 * 60;
 
 export default function App() {
   const [teams, setTeams] = useState([]);
-  const timersRef = useRef({});
 
-  // Fetch teams from Supabase
+  // Fetch initial data
   const fetchTeams = async () => {
-    const { data, error } = await supabase
-      .from("teams")
-      .select("*")
-      .order("name", { ascending: true });
+    const { data, error } = await supabase.from("teams").select("*");
     if (error) {
       console.error("Error fetching teams:", error);
-      return;
-    }
-    setTeams(data);
-  };
-
-  // Handle Punch In / Punch Out
-  const handlePunch = async (team) => {
-    try {
-      const updates = {};
-      const now = new Date().toISOString();
-
-      if (!("break_start" in team) || !("break_end" in team)) {
-        alert("Team table missing required columns!");
-        return;
-      }
-
-      if (team.break_start && !team.break_end) {
-        // Punch Out
-        updates.break_end = now;
-      } else {
-        // Punch In
-        updates.break_start = now;
-        updates.break_end = null;
-      }
-
-      console.log("Updating team:", team.id, updates);
-
-      const { error } = await supabase
-        .from("teams")
-        .update(updates)
-        .eq("id", team.id);
-
-      if (error) {
-        console.error("Error updating break:", error);
-      }
-    } catch (err) {
-      console.error("Unexpected error:", err);
+    } else {
+      setTeams(data);
     }
   };
 
-  // Setup real-time subscription
   useEffect(() => {
     fetchTeams();
+  }, []);
 
-    const channel = supabase
+  // Realtime subscription
+  useEffect(() => {
+    const subscription = supabase
       .channel("public:teams")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "teams" },
         (payload) => {
-          console.log("Realtime payload:", payload);
-          fetchTeams();
+          setTeams((prev) =>
+            prev.map((t) =>
+              t.id === payload.new.id ? { ...t, ...payload.new } : t
+            )
+          );
         }
       )
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(subscription);
     };
   }, []);
 
-  // Live timers for on-break users
+  // Handle Punch In / Punch Out
+  const handlePunch = async (team) => {
+    try {
+      const isOnBreak = team.break_start && !team.break_end;
+      const updates = isOnBreak
+        ? { break_end: new Date().toISOString() } // Punch Out
+        : { break_start: new Date().toISOString(), break_end: null }; // Punch In
+
+      const { data, error } = await supabase
+        .from("teams")
+        .update(updates)
+        .eq("id", team.id)
+        .select(); // get back updated row
+
+      if (error) throw error;
+
+      // Update local state immediately
+      setTeams((prev) =>
+        prev.map((t) => (t.id === team.id ? { ...t, ...data[0] } : t))
+      );
+    } catch (err) {
+      console.error("Error updating break:", err);
+    }
+  };
+
+  // Timer state
+  const [timer, setTimer] = useState(0);
   useEffect(() => {
-    const interval = setInterval(() => {
-      setTeams((prevTeams) => [...prevTeams]);
-    }, 1000);
+    const interval = setInterval(() => setTimer((t) => t + 1), 1000);
     return () => clearInterval(interval);
   }, []);
 
-  const formatDuration = (start) => {
-    if (!start) return "00:00:00";
-    const diff = dayjs().diff(dayjs(start), "second");
-    const hours = String(Math.floor(diff / 3600)).padStart(2, "0");
-    const minutes = String(Math.floor((diff % 3600) / 60)).padStart(2, "0");
-    const seconds = String(diff % 60).padStart(2, "0");
-    return `${hours}:${minutes}:${seconds}`;
+  // Helper to calculate live break duration in seconds
+  const getBreakDuration = (team) => {
+    if (!team.break_start) return 0;
+    const end = team.break_end ? new Date(team.break_end) : new Date();
+    const start = new Date(team.break_start);
+    return Math.floor((end - start) / 1000);
+  };
+
+  // Helper to format seconds to HH:MM:SS
+  const formatDuration = (secs) => {
+    const h = String(Math.floor(secs / 3600)).padStart(2, "0");
+    const m = String(Math.floor((secs % 3600) / 60)).padStart(2, "0");
+    const s = String(secs % 60).padStart(2, "0");
+    return `${h}:${m}:${s}`;
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
-      <h1 className="text-3xl font-bold mb-4">Team Break Dashboard</h1>
-      <button
-        onClick={fetchTeams}
-        className="mb-4 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-      >
-        Refresh
-      </button>
-      <table className="min-w-full bg-white shadow rounded overflow-hidden">
-        <thead className="bg-gray-200">
-          <tr>
-            <th className="py-2 px-4">Name</th>
-            <th className="py-2 px-4">Email</th>
-            <th className="py-2 px-4">On Break</th>
-            <th className="py-2 px-4">Break Duration</th>
-            <th className="py-2 px-4">Action</th>
+    <div className="p-6 font-sans">
+      <h1 className="text-2xl font-bold mb-4">Team Break Dashboard</h1>
+      <table className="min-w-full border border-gray-200">
+        <thead>
+          <tr className="bg-gray-100">
+            <th className="p-2 border">Name</th>
+            <th className="p-2 border">Email</th>
+            <th className="p-2 border">On Break</th>
+            <th className="p-2 border">Break Duration</th>
+            <th className="p-2 border">Action</th>
           </tr>
         </thead>
         <tbody>
           {teams.map((team) => {
-            const onBreak = team.break_start && !team.break_end;
-            const duration = onBreak ? formatDuration(team.break_start) : "00:00:00";
-            const durationMinutes = onBreak
-              ? dayjs().diff(dayjs(team.break_start), "minute")
-              : 0;
+            const duration = getBreakDuration(team);
+            const isLongBreak = duration >= LONG_BREAK_THRESHOLD;
+            const isOnBreak = team.break_start && !team.break_end;
             return (
               <tr
                 key={team.id}
-                className={
-                  onBreak && durationMinutes >= LONG_BREAK_MINUTES
-                    ? "bg-red-100"
-                    : ""
-                }
+                className={isLongBreak ? "bg-red-100" : ""}
               >
-                <td className="border px-4 py-2">{team.name}</td>
-                <td className="border px-4 py-2">{team.email}</td>
-                <td className="border px-4 py-2">
-                  {onBreak ? (
-                    <span className="bg-yellow-300 text-yellow-800 px-2 py-1 rounded">
+                <td className="p-2 border">{team.name}</td>
+                <td className="p-2 border">{team.email}</td>
+                <td className="p-2 border">
+                  {isOnBreak ? (
+                    <span className="bg-yellow-200 text-yellow-800 px-2 py-1 rounded">
                       Yes
                     </span>
                   ) : (
-                    <span className="bg-green-300 text-green-800 px-2 py-1 rounded">
+                    <span className="bg-green-200 text-green-800 px-2 py-1 rounded">
                       No
                     </span>
                   )}
                 </td>
-                <td className="border px-4 py-2 font-mono">{duration}</td>
-                <td className="border px-4 py-2">
+                <td className="p-2 border">
+                  {isOnBreak ? formatDuration(duration) : "-"}
+                </td>
+                <td className="p-2 border">
                   <button
                     onClick={() => handlePunch(team)}
-                    className={`px-3 py-1 rounded text-white ${
-                      onBreak ? "bg-red-500 hover:bg-red-600" : "bg-green-500 hover:bg-green-600"
+                    className={`px-4 py-2 rounded text-white ${
+                      isOnBreak ? "bg-red-500 hover:bg-red-600" : "bg-blue-500 hover:bg-blue-600"
                     }`}
                   >
-                    {onBreak ? "Punch Out" : "Punch In"}
+                    {isOnBreak ? "Punch Out" : "Punch In"}
                   </button>
                 </td>
               </tr>

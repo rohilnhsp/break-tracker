@@ -60,7 +60,7 @@ export default function App() {
         .from("teams")
         .update(updates)
         .eq("id", team.id)
-        .select(); // get back updated row
+        .select();
 
       if (error) throw error;
 
@@ -96,9 +96,39 @@ export default function App() {
     return `${h}:${m}:${s}`;
   };
 
+  // Export table as CSV
+  const exportCSV = () => {
+    const header = ["Name", "Email", "On Break", "Break Duration"];
+    const rows = teams.map((team) => {
+      const duration = formatDuration(getBreakDuration(team));
+      const isOnBreak = team.break_start && !team.break_end;
+      return [team.name, team.email, isOnBreak ? "Yes" : "No", duration];
+    });
+
+    const csvContent =
+      "data:text/csv;charset=utf-8," +
+      [header.join(","), ...rows.map((r) => r.join(","))].join("\n");
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `team_breaks_${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="p-6 font-sans">
-      <h1 className="text-2xl font-bold mb-4">Team Break Dashboard</h1>
+      <h1 className="text-2xl font-bold mb-4 flex items-center justify-between">
+        Team Break Dashboard
+        <button
+          onClick={exportCSV}
+          className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+        >
+          Export Data
+        </button>
+      </h1>
       <table className="min-w-full border border-gray-200">
         <thead>
           <tr className="bg-gray-100">
@@ -139,7 +169,9 @@ export default function App() {
                   <button
                     onClick={() => handlePunch(team)}
                     className={`px-4 py-2 rounded text-white ${
-                      isOnBreak ? "bg-red-500 hover:bg-red-600" : "bg-blue-500 hover:bg-blue-600"
+                      isOnBreak
+                        ? "bg-red-500 hover:bg-red-600"
+                        : "bg-blue-500 hover:bg-blue-600"
                     }`}
                   >
                     {isOnBreak ? "Punch Out" : "Punch In"}

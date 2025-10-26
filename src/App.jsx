@@ -7,24 +7,24 @@ const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const BREAK_THRESHOLD_MINUTES = 30; // Highlight users on break > 30 mins
+const BREAK_THRESHOLD_MINUTES = 30;
 
 export default function App() {
   const [teams, setTeams] = useState([]);
   const [user, setUser] = useState(null);
   const [loadingUser, setLoadingUser] = useState(true);
 
-  // Fetch current user
+  // Fetch user
   useEffect(() => {
     const fetchUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      setUser(user);
+      const { data } = await supabase.auth.getUser();
+      setUser(data.user);
       setLoadingUser(false);
     };
     fetchUser();
   }, []);
 
-  // Fetch team data
+  // Fetch teams
   const fetchTeams = async () => {
     const { data, error } = await supabase
       .from("teams")
@@ -38,17 +38,17 @@ export default function App() {
   useEffect(() => {
     fetchTeams();
 
-    // Subscribe to realtime updates
-    const subscription = supabase
-      .channel("public:teams")
-      .on("postgres_changes", { event: "*", schema: "public", table: "teams" }, payload => {
-        fetchTeams();
-      })
+    // Realtime subscription
+    const channel = supabase
+      .channel("teams")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "teams" },
+        () => fetchTeams()
+      )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(subscription);
-    };
+    return () => supabase.removeChannel(channel);
   }, []);
 
   // Punch In / Punch Out
@@ -59,48 +59,46 @@ export default function App() {
       : { break_start: new Date().toISOString(), break_end: null };
 
     try {
-      await supabase
+      const { error } = await supabase
         .from("teams")
         .update(update)
-        .eq("id", team.id);
+        .eq("id", team.id)
+        .select();
+
+      if (error) throw error;
+      fetchTeams(); // refresh immediately
     } catch (err) {
       console.error("Error updating break:", err);
     }
   };
 
-  // Live timer in HH:MM:SS
+  // Timer
   const getBreakDuration = (start, end) => {
     if (!start) return "00:00:00";
     const startTime = dayjs(start);
     const endTime = end ? dayjs(end) : dayjs();
     const diffSeconds = endTime.diff(startTime, "second");
-
     const hours = String(Math.floor(diffSeconds / 3600)).padStart(2, "0");
     const minutes = String(Math.floor((diffSeconds % 3600) / 60)).padStart(2, "0");
     const seconds = String(diffSeconds % 60).padStart(2, "0");
-
     return `${hours}:${minutes}:${seconds}`;
   };
 
-  // Auto update timers every second
   useEffect(() => {
-    const interval = setInterval(() => {
-      setTeams(t => [...t]);
-    }, 1000);
+    const interval = setInterval(() => setTeams(t => [...t]), 1000);
     return () => clearInterval(interval);
   }, []);
 
-  // CSV download (pure JS)
+  // CSV Export
   const downloadCSV = (period) => {
     let filteredTeams = [...teams];
-
     const now = dayjs();
     filteredTeams = filteredTeams.filter(team => {
       if (!team.break_start) return false;
-      const breakStart = dayjs(team.break_start);
-      if (period === "day") return breakStart.isSame(now, "day");
-      if (period === "week") return breakStart.isSame(now, "week");
-      if (period === "month") return breakStart.isSame(now, "month");
+      const start = dayjs(team.break_start);
+      if (period === "day") return start.isSame(now, "day");
+      if (period === "week") return start.isSame(now, "week");
+      if (period === "month") return start.isSame(now, "month");
       return true;
     });
 
@@ -116,10 +114,9 @@ export default function App() {
       "data:text/csv;charset=utf-8," +
       [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
 
-    const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `breaks_${period}.csv`);
+    link.href = encodeURI(csvContent);
+    link.download = `breaks_${period}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -131,29 +128,14 @@ export default function App() {
     <div className="p-4">
       <h1 className="text-2xl font-bold mb-4">Team Break Dashboard</h1>
 
-      {user?.role === "admin" || user?.role === "manager" ? (
+      {(user?.role === "admin" || user?.role === "manager") && (
         <div className="mb-4">
           <span className="mr-2 font-semibold">Export:</span>
-          <button
-            onClick={() => downloadCSV("day")}
-            className="bg-blue-500 text-white px-3 py-1 rounded mr-2"
-          >
-            Day
-          </button>
-          <button
-            onClick={() => downloadCSV("week")}
-            className="bg-green-500 text-white px-3 py-1 rounded mr-2"
-          >
-            Week
-          </button>
-          <button
-            onClick={() => downloadCSV("month")}
-            className="bg-purple-500 text-white px-3 py-1 rounded"
-          >
-            Month
-          </button>
+          <button onClick={() => downloadCSV("day")} className="bg-blue-500 text-white px-3 py-1 rounded mr-2">Day</button>
+          <button onClick={() => downloadCSV("week")} className="bg-green-500 text-white px-3 py-1 rounded mr-2">Week</button>
+          <button onClick={() => downloadCSV("month")} className="bg-purple-500 text-white px-3 py-1 rounded">Month</button>
         </div>
-      ) : null}
+      )}
 
       <table className="min-w-full border-collapse border border-gray-300">
         <thead>
@@ -180,9 +162,7 @@ export default function App() {
                 <td className="border p-2">
                   <button
                     onClick={() => toggleBreak(team)}
-                    className={`px-3 py-1 rounded ${
-                      onBreak ? "bg-red-500 text-white" : "bg-green-500 text-white"
-                    }`}
+                    className={`px-3 py-1 rounded ${onBreak ? "bg-red-500 text-white" : "bg-green-500 text-white"}`}
                   >
                     {onBreak ? "Punch Out" : "Punch In"}
                   </button>

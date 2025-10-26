@@ -9,7 +9,6 @@ const anonKey =
 const supabase = createClient(supabaseUrl, anonKey);
 
 const App = () => {
-  const [user, setUser] = useState(null);
   const [teams, setTeams] = useState([]);
   const [adminModal, setAdminModal] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
@@ -17,15 +16,6 @@ const App = () => {
   const [newUserEmail, setNewUserEmail] = useState("");
 
   const LONG_BREAK_MIN = 10; // Highlight if break exceeds this
-
-  // Fetch current user session
-  useEffect(() => {
-    const fetchUser = async () => {
-      const { data: sessionData } = await supabase.auth.getSession();
-      setUser(sessionData.session?.user ?? null);
-    };
-    fetchUser();
-  }, []);
 
   // Fetch teams from Supabase
   const fetchTeams = async () => {
@@ -42,7 +32,7 @@ const App = () => {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "teams" },
-        (payload) => {
+        () => {
           fetchTeams();
         }
       )
@@ -59,11 +49,7 @@ const App = () => {
         ? { break_end: now } // Punch Out
         : { break_start: now, break_end: null }; // Punch In
 
-    const { error } = await supabase
-      .from("teams")
-      .update(updates)
-      .eq("id", team.id);
-
+    const { error } = await supabase.from("teams").update(updates).eq("id", team.id);
     if (error) {
       console.error("Error updating break:", error);
     } else {
@@ -73,7 +59,6 @@ const App = () => {
 
   // Admin login
   const handleAdminLogin = () => {
-    // Replace with your secure check / password
     if (adminPassword === "admin123") {
       setIsAdmin(true);
       setAdminModal(false);
@@ -107,8 +92,8 @@ const App = () => {
     const now = new Date();
 
     if (period === "daily") {
-      filteredTeams = filteredTeams.filter((t) =>
-        t.break_start ? new Date(t.break_start).toDateString() === now.toDateString() : false
+      filteredTeams = filteredTeams.filter(
+        (t) => t.break_start && new Date(t.break_start).toDateString() === now.toDateString()
       );
     } else if (period === "weekly") {
       const weekAgo = new Date();
@@ -132,8 +117,12 @@ const App = () => {
         .map((t) => {
           const start = t.break_start ? new Date(t.break_start).toLocaleString() : "";
           const end = t.break_end ? new Date(t.break_end).toLocaleString() : "";
-          const duration = t.break_start && t.break_end
-            ? Math.floor((new Date(t.break_end) - new Date(t.break_start)) / 1000)
+          const duration = t.break_start
+            ? Math.floor(
+                ((t.break_end ? new Date(t.break_end) : new Date()) -
+                  new Date(t.break_start)) /
+                  1000
+              )
             : 0;
           return [t.name, start, end, duration].join(",");
         })
@@ -147,6 +136,13 @@ const App = () => {
     link.click();
     document.body.removeChild(link);
   };
+
+  // Live timers update every second
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Format HH:MM:SS
   const formatDuration = (seconds) => {
@@ -235,13 +231,13 @@ const App = () => {
                   onChange={(e) => setAdminPassword(e.target.value)}
                 />
                 <button
-                  className="px-3 py-2 bg-blue-500 text-white rounded"
+                  className="px-3 py-2 bg-blue-500 text-white rounded mr-2"
                   onClick={handleAdminLogin}
                 >
                   Login
                 </button>
                 <button
-                  className="ml-2 px-3 py-2 bg-gray-300 rounded"
+                  className="px-3 py-2 bg-gray-300 rounded"
                   onClick={() => setAdminModal(false)}
                 >
                   Cancel
@@ -250,20 +246,26 @@ const App = () => {
             ) : (
               <>
                 <h2 className="text-xl font-bold mb-2">Admin Panel</h2>
-                <input
-                  type="text"
-                  placeholder="New user name/email"
-                  className="border p-2 w-full mb-2"
-                  value={newUserEmail}
-                  onChange={(e) => setNewUserEmail(e.target.value)}
-                />
-                <button
-                  className="px-3 py-2 bg-green-500 text-white rounded mb-2"
-                  onClick={handleAddUser}
-                >
-                  Add User
-                </button>
-                <div className="mt-2">
+
+                {/* Add User */}
+                <div className="mb-4">
+                  <input
+                    type="text"
+                    placeholder="New User Name"
+                    className="border p-2 mr-2"
+                    value={newUserEmail}
+                    onChange={(e) => setNewUserEmail(e.target.value)}
+                  />
+                  <button
+                    className="px-3 py-2 bg-green-500 text-white rounded"
+                    onClick={handleAddUser}
+                  >
+                    Add User
+                  </button>
+                </div>
+
+                {/* Export */}
+                <div className="mb-4">
                   <button
                     className="px-3 py-2 bg-purple-500 text-white rounded mr-2"
                     onClick={() => handleExport("daily")}
@@ -283,9 +285,14 @@ const App = () => {
                     Export Monthly
                   </button>
                 </div>
+
                 <button
-                  className="mt-4 px-3 py-2 bg-gray-300 rounded"
-                  onClick={() => setIsAdmin(false)}
+                  className="px-3 py-2 bg-red-500 text-white rounded"
+                  onClick={() => {
+                    setIsAdmin(false);
+                    setAdminModal(false);
+                    setAdminPassword("");
+                  }}
                 >
                   Logout Admin
                 </button>

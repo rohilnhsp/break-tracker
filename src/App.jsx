@@ -6,20 +6,19 @@ const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Long break threshold in seconds (e.g., 15 mins = 900s)
 const LONG_BREAK_THRESHOLD = 15 * 60;
 
-export default function App() {
+export default function App({ currentUser }) {
   const [teams, setTeams] = useState([]);
+  const [timer, setTimer] = useState(0);
+  const [exportPeriod, setExportPeriod] = useState("day"); // day / week / month
+  const [newUser, setNewUser] = useState({ name: "", email: "", role: "user" });
 
-  // Fetch initial data
+  // Fetch teams
   const fetchTeams = async () => {
     const { data, error } = await supabase.from("teams").select("*");
-    if (error) {
-      console.error("Error fetching teams:", error);
-    } else {
-      setTeams(data);
-    }
+    if (error) console.error("Error fetching teams:", error);
+    else setTeams(data);
   };
 
   useEffect(() => {
@@ -35,60 +34,27 @@ export default function App() {
         { event: "*", schema: "public", table: "teams" },
         (payload) => {
           setTeams((prev) =>
-            prev.map((t) =>
-              t.id === payload.new.id ? { ...t, ...payload.new } : t
-            )
+            prev.map((t) => (t.id === payload.new.id ? { ...t, ...payload.new } : t))
           );
         }
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(subscription);
-    };
+    return () => supabase.removeChannel(subscription);
   }, []);
 
-  // Handle Punch In / Punch Out
-  const handlePunch = async (team) => {
-    try {
-      const isOnBreak = team.break_start && !team.break_end;
-      const updates = isOnBreak
-        ? { break_end: new Date().toISOString() } // Punch Out
-        : { break_start: new Date().toISOString(), break_end: null }; // Punch In
-
-      const { data, error } = await supabase
-        .from("teams")
-        .update(updates)
-        .eq("id", team.id)
-        .select();
-
-      if (error) throw error;
-
-      // Update local state immediately
-      setTeams((prev) =>
-        prev.map((t) => (t.id === team.id ? { ...t, ...data[0] } : t))
-      );
-    } catch (err) {
-      console.error("Error updating break:", err);
-    }
-  };
-
-  // Timer state
-  const [timer, setTimer] = useState(0);
+  // Timer increment every second
   useEffect(() => {
     const interval = setInterval(() => setTimer((t) => t + 1), 1000);
     return () => clearInterval(interval);
   }, []);
 
-  // Helper to calculate live break duration in seconds
   const getBreakDuration = (team) => {
     if (!team.break_start) return 0;
     const end = team.break_end ? new Date(team.break_end) : new Date();
-    const start = new Date(team.break_start);
-    return Math.floor((end - start) / 1000);
+    return Math.floor((end - new Date(team.break_start)) / 1000);
   };
 
-  // Helper to format seconds to HH:MM:SS
   const formatDuration = (secs) => {
     const h = String(Math.floor(secs / 3600)).padStart(2, "0");
     const m = String(Math.floor((secs % 3600) / 60)).padStart(2, "0");
@@ -96,10 +62,47 @@ export default function App() {
     return `${h}:${m}:${s}`;
   };
 
-  // Export table as CSV
+  const handlePunch = async (team) => {
+    const isOnBreak = team.break_start && !team.break_end;
+    const updates = isOnBreak
+      ? { break_end: new Date().toISOString() }
+      : { break_start: new Date().toISOString(), break_end: null };
+
+    const { data, error } = await supabase
+      .from("teams")
+      .update(updates)
+      .eq("id", team.id)
+      .select();
+
+    if (error) console.error("Error updating break:", error);
+    else setTeams((prev) => prev.map((t) => (t.id === team.id ? { ...t, ...data[0] } : t)));
+  };
+
   const exportCSV = () => {
+    // Filter teams by exportPeriod
+    const now = new Date();
+    let filtered = teams;
+    if (exportPeriod === "day") {
+      filtered = teams.filter((t) =>
+        t.break_start && new Date(t.break_start).toDateString() === now.toDateString()
+      );
+    } else if (exportPeriod === "week") {
+      const weekStart = new Date(now);
+      weekStart.setDate(now.getDate() - now.getDay());
+      filtered = teams.filter(
+        (t) => t.break_start && new Date(t.break_start) >= weekStart
+      );
+    } else if (exportPeriod === "month") {
+      filtered = teams.filter(
+        (t) =>
+          t.break_start &&
+          new Date(t.break_start).getMonth() === now.getMonth() &&
+          new Date(t.break_start).getFullYear() === now.getFullYear()
+      );
+    }
+
     const header = ["Name", "Email", "On Break", "Break Duration"];
-    const rows = teams.map((team) => {
+    const rows = filtered.map((team) => {
       const duration = formatDuration(getBreakDuration(team));
       const isOnBreak = team.break_start && !team.break_end;
       return [team.name, team.email, isOnBreak ? "Yes" : "No", duration];
@@ -118,17 +121,74 @@ export default function App() {
     document.body.removeChild(link);
   };
 
+  const addUser = async () => {
+    const { data, error } = await supabase.from("teams").insert([newUser]).select();
+    if (error) console.error("Error adding user:", error);
+    else {
+      setTeams((prev) => [...prev, data[0]]);
+      setNewUser({ name: "", email: "", role: "user" });
+    }
+  };
+
   return (
     <div className="p-6 font-sans">
-      <h1 className="text-2xl font-bold mb-4 flex items-center justify-between">
-        Team Break Dashboard
-        <button
-          onClick={exportCSV}
-          className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
-        >
-          Export Data
-        </button>
-      </h1>
+      <h1 className="text-2xl font-bold mb-4">Team Break Dashboard</h1>
+
+      {(currentUser.role === "manager" || currentUser.role === "admin") && (
+        <div className="mb-4 flex flex-col md:flex-row md:items-center md:space-x-4">
+          <div className="flex items-center space-x-2 mb-2 md:mb-0">
+            <label>Export Period:</label>
+            <select
+              value={exportPeriod}
+              onChange={(e) => setExportPeriod(e.target.value)}
+              className="border px-2 py-1 rounded"
+            >
+              <option value="day">Day</option>
+              <option value="week">Week</option>
+              <option value="month">Month</option>
+            </select>
+          </div>
+          <button
+            onClick={exportCSV}
+            className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+          >
+            Export Data
+          </button>
+
+          <div className="ml-auto flex items-center space-x-2 mt-2 md:mt-0">
+            <input
+              type="text"
+              placeholder="Name"
+              value={newUser.name}
+              onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
+              className="border px-2 py-1 rounded"
+            />
+            <input
+              type="email"
+              placeholder="Email"
+              value={newUser.email}
+              onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+              className="border px-2 py-1 rounded"
+            />
+            <select
+              value={newUser.role}
+              onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
+              className="border px-2 py-1 rounded"
+            >
+              <option value="user">User</option>
+              <option value="manager">Manager</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button
+              onClick={addUser}
+              className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+            >
+              Add User
+            </button>
+          </div>
+        </div>
+      )}
+
       <table className="min-w-full border border-gray-200">
         <thead>
           <tr className="bg-gray-100">
@@ -145,10 +205,7 @@ export default function App() {
             const isLongBreak = duration >= LONG_BREAK_THRESHOLD;
             const isOnBreak = team.break_start && !team.break_end;
             return (
-              <tr
-                key={team.id}
-                className={isLongBreak ? "bg-red-100" : ""}
-              >
+              <tr key={team.id} className={isLongBreak ? "bg-red-100" : ""}>
                 <td className="p-2 border">{team.name}</td>
                 <td className="p-2 border">{team.email}</td>
                 <td className="p-2 border">
@@ -163,7 +220,7 @@ export default function App() {
                   )}
                 </td>
                 <td className="p-2 border">
-                  {isOnBreak ? formatDuration(duration) : "-"}
+                  {team.break_start ? formatDuration(duration) : "-"}
                 </td>
                 <td className="p-2 border">
                   <button

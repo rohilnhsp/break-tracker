@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = "https://ulgagdsllwkqxluakifk.supabase.co";
@@ -6,261 +6,224 @@ const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-function formatDuration(seconds) {
-  const h = String(Math.floor(seconds / 3600)).padStart(2, "0");
-  const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
-  const s = String(seconds % 60).padStart(2, "0");
-  return `${h}:${m}:${s}`;
-}
+// Admin secret for generic login
+const ADMIN_SECRET = "supersecret"; // Change to your chosen password
 
-function App() {
-  const [teams, setTeams] = useState([]);
+export default function App() {
   const [user, setUser] = useState(null);
+  const [teams, setTeams] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [users, setUsers] = useState([]);
+  const [adminMode, setAdminMode] = useState(false);
+  const [adminPassword, setAdminPassword] = useState("");
+
   const [newUser, setNewUser] = useState({ name: "", email: "", role: "user" });
 
-  const intervalRef = useRef();
+  // Ref to store timers
+  const timersRef = useRef({});
 
+  // Fetch current user from Supabase
   useEffect(() => {
-    const getUser = async () => {
-      const { data: { user }, error } = await supabase.auth.getUser();
-      if (error) console.error(error);
-      else setUser(user);
+    const fetchUser = async () => {
+      const { data: u, error } = await supabase.auth.getUser();
+      if (error) {
+        console.error(error);
+        setUser(null);
+      } else {
+        setUser(u.user);
+      }
       setLoading(false);
     };
-    getUser();
+    fetchUser();
   }, []);
 
-  useEffect(() => {
-    const fetchTeams = async () => {
-      const { data, error } = await supabase.from("teams").select("*");
-      if (error) console.error(error);
-      else setTeams(data);
-    };
-    fetchTeams();
+  // Fetch teams from Supabase
+  const fetchTeams = async () => {
+    const { data, error } = await supabase.from("teams").select("*");
+    if (error) console.error(error);
+    else setTeams(data || []);
+  };
 
-    const subscription = supabase
-      .channel("public:teams")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "teams" },
-        (payload) => {
-          setTeams((prev) =>
-            prev.map((t) => (t.id === payload.new.id ? payload.new : t))
-          );
-        }
-      )
-      .subscribe();
-
-    return () => supabase.removeChannel(subscription);
-  }, []);
-
-  useEffect(() => {
-    intervalRef.current = setInterval(() => {
-      setTeams((prev) =>
-        prev.map((t) => {
-          if (t.break_start && !t.break_end) {
-            const start = new Date(t.break_start);
-            const seconds = Math.floor((Date.now() - start) / 1000);
-            return { ...t, liveDuration: seconds };
-          }
-          return { ...t, liveDuration: 0 };
-        })
-      );
-    }, 1000);
-
-    return () => clearInterval(intervalRef.current);
-  }, []);
-
+  // Handle Punch In / Out
   const handlePunch = async (team) => {
     try {
       const now = new Date().toISOString();
-      const updates =
-        !team.break_start || team.break_end
-          ? { break_start: now, break_end: null }
-          : { break_end: now };
+      const updateData =
+        team.break_start && !team.break_end
+          ? { break_end: now } // Punch Out
+          : { break_start: now, break_end: null }; // Punch In
 
-      const { data, error } = await supabase
+      await supabase
         .from("teams")
-        .update(updates)
-        .eq("id", team.id)
-        .select();
+        .update(updateData)
+        .eq("id", team.id);
 
-      if (error) throw error;
-
+      // Immediately update local state
       setTeams((prev) =>
-        prev.map((t) => (t.id === team.id ? { ...t, ...data[0] } : t))
+        prev.map((t) =>
+          t.id === team.id
+            ? { ...t, ...updateData }
+            : t
+        )
       );
-    } catch (err) {
-      console.error("Error updating break:", err);
-      alert("Failed to update break");
+    } catch (error) {
+      console.error("Error updating break:", error);
+      alert("Error updating break");
     }
   };
 
-  const exportCSV = (filter = "all") => {
-    let filteredTeams = teams;
+  // Live timers
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTeams((prev) =>
+        prev.map((t) => {
+          if (t.break_start && !t.break_end) {
+            return { ...t, duration: new Date() - new Date(t.break_start) };
+          }
+          return { ...t, duration: t.break_end && t.break_start ? new Date(t.break_end) - new Date(t.break_start) : 0 };
+        })
+      );
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
+  // Convert milliseconds to HH:MM:SS
+  const formatDuration = (ms) => {
+    if (!ms) return "00:00:00";
+    const totalSeconds = Math.floor(ms / 1000);
+    const h = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
+    const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
+    const s = String(totalSeconds % 60).padStart(2, "0");
+    return `${h}:${m}:${s}`;
+  };
+
+  // Handle Admin Login
+  const handleAdminLogin = () => {
+    if (adminPassword === ADMIN_SECRET) {
+      setAdminMode(true);
+      setAdminPassword("");
+    } else {
+      alert("Wrong password!");
+    }
+  };
+
+  // Add user
+  const handleAddUser = async () => {
+    if (!newUser.name || !newUser.email) return alert("Enter name & email");
+    const { data, error } = await supabase.from("teams").insert([newUser]);
+    if (error) {
+      console.error(error);
+      alert("Error adding user");
+    } else {
+      setTeams((prev) => [...prev, data[0]]);
+      setNewUser({ name: "", email: "", role: "user" });
+    }
+  };
+
+  // Export CSV
+  const handleExport = (range = "day") => {
+    let filtered = [...teams];
     const now = new Date();
-    if (filter === "daily") {
-      filteredTeams = teams.filter(
-        (t) =>
-          t.break_start &&
-          new Date(t.break_start).toDateString() === now.toDateString()
-      );
-    } else if (filter === "weekly") {
-      const weekStart = new Date();
-      weekStart.setDate(now.getDate() - now.getDay());
-      filteredTeams = teams.filter(
-        (t) =>
-          t.break_start &&
-          new Date(t.break_start) >= weekStart
-      );
-    } else if (filter === "monthly") {
-      filteredTeams = teams.filter(
-        (t) =>
-          t.break_start &&
-          new Date(t.break_start).getMonth() === now.getMonth() &&
-          new Date(t.break_start).getFullYear() === now.getFullYear()
-      );
+    if (range === "day") {
+      filtered = filtered.filter((t) => new Date(t.break_start) >= new Date(now.setHours(0, 0, 0, 0)));
+    } else if (range === "week") {
+      const weekAgo = new Date();
+      weekAgo.setDate(now.getDate() - 7);
+      filtered = filtered.filter((t) => new Date(t.break_start) >= weekAgo);
+    } else if (range === "month") {
+      const monthAgo = new Date();
+      monthAgo.setMonth(now.getMonth() - 1);
+      filtered = filtered.filter((t) => new Date(t.break_start) >= monthAgo);
     }
 
-    const csvContent = [
-      ["Name", "Email", "Break Start", "Break End", "Duration (HH:MM:SS)"],
-      ...filteredTeams.map((t) => [
-        t.name,
-        t.email,
-        t.break_start || "",
-        t.break_end || "",
-        t.liveDuration ? formatDuration(t.liveDuration) : ""
-      ])
-    ]
-      .map((e) => e.join(","))
-      .join("\n");
-
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const headers = ["Name", "Email", "Break Start", "Break End", "Duration"];
+    const rows = filtered.map((t) => [
+      t.name,
+      t.email,
+      t.break_start,
+      t.break_end,
+      formatDuration(t.duration),
+    ]);
+    const csvContent =
+      "data:text/csv;charset=utf-8," +
+      [headers, ...rows].map((e) => e.join(",")).join("\n");
+    const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.setAttribute("download", "breaks_export.csv");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "break_data.csv");
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  // Fetch all users (admin only)
-  useEffect(() => {
-    const fetchUsers = async () => {
-      if (!user?.role) return;
-      const { data, error } = await supabase.from("users").select("*");
-      if (error) console.error(error);
-      else setUsers(data);
-    };
-    fetchUsers();
-  }, [user]);
-
-  const addUser = async () => {
-    try {
-      const { data, error } = await supabase.from("users").insert([newUser]).select();
-      if (error) throw error;
-      setUsers((prev) => [...prev, ...data]);
-      setNewUser({ name: "", email: "", role: "user" });
-    } catch (err) {
-      console.error(err);
-      alert("Failed to add user");
-    }
-  };
-
-  if (loading) return <div className="p-6">Loading user...</div>;
-
-  const isAdmin = user?.role === "admin" || user?.role === "manager";
+  if (loading) return <div>Loading user...</div>;
 
   return (
-    <div className="p-6">
-      <h1 className="text-2xl font-bold mb-4">Team Break Dashboard</h1>
+    <div className="p-4">
+      {!adminMode && (
+        <div className="p-4 border rounded bg-gray-100 mb-4">
+          <h2 className="font-bold mb-2">Admin Login</h2>
+          <input
+            type="password"
+            placeholder="Enter admin password"
+            className="border px-2 py-1 mr-2"
+            value={adminPassword}
+            onChange={(e) => setAdminPassword(e.target.value)}
+          />
+          <button
+            className="bg-blue-500 text-white px-3 py-1 rounded"
+            onClick={handleAdminLogin}
+          >
+            Login
+          </button>
+        </div>
+      )}
 
-      {isAdmin && (
-        <>
-          <div className="mb-4 flex gap-2">
-            <button
-              className="bg-blue-500 text-white px-4 py-2 rounded"
-              onClick={() => exportCSV("daily")}
-            >
-              Export Daily
-            </button>
-            <button
-              className="bg-blue-500 text-white px-4 py-2 rounded"
-              onClick={() => exportCSV("weekly")}
-            >
-              Export Weekly
-            </button>
-            <button
-              className="bg-blue-500 text-white px-4 py-2 rounded"
-              onClick={() => exportCSV("monthly")}
-            >
-              Export Monthly
-            </button>
+      {adminMode && (
+        <div className="mb-4">
+          <h2 className="font-bold mb-2">Admin Actions</h2>
+          <div className="mb-2">
+            <button className="bg-green-500 text-white px-3 py-1 rounded mr-2" onClick={() => handleExport("day")}>Export Day</button>
+            <button className="bg-green-500 text-white px-3 py-1 rounded mr-2" onClick={() => handleExport("week")}>Export Week</button>
+            <button className="bg-green-500 text-white px-3 py-1 rounded mr-2" onClick={() => handleExport("month")}>Export Month</button>
           </div>
-
-          {/* Add User Form */}
-          <div className="mb-6 p-4 border rounded bg-gray-50">
-            <h2 className="font-bold mb-2">Add / Assign User</h2>
+          <div className="mb-2 flex items-center gap-2">
             <input
-              className="border px-2 py-1 mr-2"
+              type="text"
               placeholder="Name"
+              className="border px-2 py-1"
               value={newUser.name}
               onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
             />
             <input
-              className="border px-2 py-1 mr-2"
+              type="email"
               placeholder="Email"
+              className="border px-2 py-1"
               value={newUser.email}
               onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
             />
             <select
-              className="border px-2 py-1 mr-2"
+              className="border px-2 py-1"
               value={newUser.role}
               onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
             >
               <option value="user">User</option>
-              <option value="manager">Manager</option>
               <option value="admin">Admin</option>
+              <option value="manager">Manager</option>
             </select>
             <button
-              className="bg-green-500 text-white px-3 py-1 rounded"
-              onClick={addUser}
+              className="bg-blue-500 text-white px-3 py-1 rounded"
+              onClick={handleAddUser}
             >
               Add User
             </button>
           </div>
-
-          {/* Existing users list */}
-          <div className="mb-6">
-            <h3 className="font-bold mb-2">Users</h3>
-            <table className="min-w-full border border-gray-300">
-              <thead className="bg-gray-200">
-                <tr>
-                  <th className="border px-2 py-1">Name</th>
-                  <th className="border px-2 py-1">Email</th>
-                  <th className="border px-2 py-1">Role</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((u) => (
-                  <tr key={u.id}>
-                    <td className="border px-2 py-1">{u.name}</td>
-                    <td className="border px-2 py-1">{u.email}</td>
-                    <td className="border px-2 py-1">{u.role}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
+        </div>
       )}
 
-      <table className="min-w-full border border-gray-300">
-        <thead className="bg-gray-200">
-          <tr>
+      <h2 className="font-bold mb-2">Team Break Dashboard</h2>
+      <table className="table-auto border-collapse border border-gray-300 w-full">
+        <thead>
+          <tr className="bg-gray-200">
             <th className="border px-2 py-1">Name</th>
             <th className="border px-2 py-1">Email</th>
             <th className="border px-2 py-1">On Break</th>
@@ -271,24 +234,13 @@ function App() {
         <tbody>
           {teams.map((team) => {
             const onBreak = team.break_start && !team.break_end;
-            const duration = team.liveDuration || 0;
-            const longBreak = duration > 30 * 60;
-
+            const longBreak = onBreak && team.duration > 15 * 60 * 1000; // >15 mins
             return (
-              <tr
-                key={team.id}
-                className={longBreak ? "bg-red-100" : ""}
-              >
+              <tr key={team.id} className={longBreak ? "bg-red-100" : ""}>
                 <td className="border px-2 py-1">{team.name}</td>
                 <td className="border px-2 py-1">{team.email}</td>
-                <td className="border px-2 py-1">
-                  {onBreak ? (
-                    <span className="bg-yellow-200 px-2 py-1 rounded">Yes</span>
-                  ) : (
-                    <span className="bg-green-200 px-2 py-1 rounded">No</span>
-                  )}
-                </td>
-                <td className="border px-2 py-1">{formatDuration(duration)}</td>
+                <td className="border px-2 py-1">{onBreak ? "Yes" : "No"}</td>
+                <td className="border px-2 py-1">{formatDuration(team.duration)}</td>
                 <td className="border px-2 py-1">
                   <button
                     className={`px-2 py-1 rounded ${
@@ -307,5 +259,3 @@ function App() {
     </div>
   );
 }
-
-export default App;

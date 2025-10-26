@@ -4,7 +4,6 @@ import { supabase } from "./supabaseClient";
 function App() {
   const [teams, setTeams] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [tick, setTick] = useState(0); // for live updates
 
   // Fetch teams from Supabase
   const fetchTeams = async () => {
@@ -22,12 +21,12 @@ function App() {
     setLoading(false);
   };
 
-  // Update break status
+  // Toggle break status
   const toggleBreak = async (team) => {
     const now = new Date().toISOString();
     const on_break = !team.on_break;
 
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from("teams")
       .update({
         on_break,
@@ -37,8 +36,6 @@ function App() {
 
     if (error) {
       console.error("Error updating break:", error.message);
-    } else {
-      fetchTeams(); // refresh list
     }
   };
 
@@ -50,15 +47,25 @@ function App() {
     return Math.floor((now - start) / 1000 / 60);
   };
 
-  // Initial fetch
+  // Initial fetch and setup Realtime subscription
   useEffect(() => {
     fetchTeams();
-  }, []);
 
-  // Auto-refresh every minute
-  useEffect(() => {
-    const interval = setInterval(() => setTick((t) => t + 1), 60000);
-    return () => clearInterval(interval);
+    // Subscribe to changes in 'teams' table
+    const subscription = supabase
+      .channel("public:teams")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "teams" },
+        (payload) => {
+          fetchTeams(); // Refresh teams on any insert, update, delete
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(subscription); // Clean up subscription on unmount
+    };
   }, []);
 
   if (loading) return <p className="p-4">Loading teams...</p>;

@@ -1,284 +1,192 @@
 import React, { useState, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card, CardContent } from "@/components/ui/card";
 
-// ---- Supabase Clients ----
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-const serviceKey = import.meta.env.VITE_SUPABASE_SERVICE_KEY;
+// Initialize Supabase Client (only once)
+const supabaseUrl = "https://ulgagdsllwkqxluakifk.supabase.co";
+const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk"; // keep anon key only on client
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-// public user client
-const supabase = createClient(supabaseUrl, anonKey);
-
-// secure admin client (server-side power)
-const supabaseAdmin = createClient(supabaseUrl, serviceKey);
-
-const App = () => {
+export default function App() {
   const [user, setUser] = useState(null);
-  const [team, setTeam] = useState([]);
+  const [admin, setAdmin] = useState(false);
+  const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [adminPassword, setAdminPassword] = useState("");
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [newUserName, setNewUserName] = useState("");
-  const [newUserRole, setNewUserRole] = useState("user");
-  const [error, setError] = useState("");
+  const [newUser, setNewUser] = useState("");
+  const [timer, setTimer] = useState(0);
+  const [punchStatus, setPunchStatus] = useState("Out");
+  const [intervalId, setIntervalId] = useState(null);
 
-  // ---- Admin password (you can customize this easily) ----
-  const ADMIN_SECRET = "nhsp-admin-2025"; // simple generic admin login
-
-  // ---- Load team members ----
-  const fetchTeam = async () => {
-    const { data, error } = await supabase.from("team").select("*");
-    if (error) console.error(error);
-    else setTeam(data || []);
-  };
-
-  // ---- Handle Punch In ----
-  const handlePunchIn = async (id) => {
-    const { error } = await supabase
-      .from("team")
-      .update({ status: "Working", break_start: null, break_end: null })
-      .eq("id", id);
-    if (error) console.error(error);
-    fetchTeam();
-  };
-
-  // ---- Handle Punch Out ----
-  const handlePunchOut = async (id) => {
-    const now = new Date().toISOString();
-    const { data, error } = await supabase
-      .from("team")
-      .update({ status: "On Break", break_start: now })
-      .eq("id", id);
-    if (error) console.error(error);
-    fetchTeam();
-  };
-
-  // ---- Add User ----
-  const handleAddUser = async () => {
-    if (!newUserName.trim()) {
-      setError("Enter a name first!");
-      return;
+  // Fetch all users (Admin view)
+  const fetchUsers = async () => {
+    try {
+      const { data, error } = await supabase.from("teams").select("*");
+      if (error) throw error;
+      setUsers(data || []);
+    } catch (err) {
+      console.error("Error fetching users:", err);
+    } finally {
+      setLoading(false);
     }
+  };
 
-    const { error } = await supabaseAdmin
-      .from("team")
-      .insert([{ name: newUserName.trim(), role: newUserRole, status: "Available" }]);
-
-    if (error) {
-      console.error(error);
-      setError("Error adding user");
+  // Timer system
+  useEffect(() => {
+    if (punchStatus === "In") {
+      const id = setInterval(() => setTimer((t) => t + 1), 1000);
+      setIntervalId(id);
+      return () => clearInterval(id);
     } else {
-      setError("");
-      setNewUserName("");
-      fetchTeam();
+      if (intervalId) clearInterval(intervalId);
+    }
+  }, [punchStatus]);
+
+  // Punch in/out handler
+  const handlePunch = () => {
+    if (punchStatus === "Out") {
+      setPunchStatus("In");
+      setTimer(0);
+    } else {
+      setPunchStatus("Out");
     }
   };
 
-  // ---- Export to CSV ----
-  const handleExport = (range = "all") => {
-    if (!team.length) return alert("No data to export");
-    const now = new Date();
-    let filtered = team;
-
-    if (range === "day") {
-      const today = now.toISOString().split("T")[0];
-      filtered = team.filter(
-        (m) => (m.break_start || "").startsWith(today) || (m.break_end || "").startsWith(today)
-      );
-    } else if (range === "week") {
-      const weekAgo = new Date();
-      weekAgo.setDate(now.getDate() - 7);
-      filtered = team.filter(
-        (m) => new Date(m.break_start || now) >= weekAgo || new Date(m.break_end || now) >= weekAgo
-      );
-    } else if (range === "month") {
-      const monthAgo = new Date();
-      monthAgo.setDate(now.getDate() - 30);
-      filtered = team.filter(
-        (m) => new Date(m.break_start || now) >= monthAgo || new Date(m.break_end || now) >= monthAgo
-      );
+  // Add new user (Admin)
+  const handleAddUser = async () => {
+    if (!newUser.trim()) return;
+    try {
+      const { error } = await supabase.from("teams").insert([{ name: newUser }]);
+      if (error) throw error;
+      setNewUser("");
+      fetchUsers();
+    } catch (err) {
+      console.error("Error adding user:", err);
     }
+  };
 
-    const csv =
-      "Name,Role,Status,Break Start,Break End\n" +
-      filtered
-        .map(
-          (m) =>
-            `${m.name},${m.role},${m.status || ""},${m.break_start || ""},${m.break_end || ""}`
-        )
-        .join("\n");
-
+  // Export CSV
+  const handleExport = () => {
+    const csv = [
+      ["Name", "Status", "Time"],
+      ...users.map((u) => [u.name, u.status || "-", u.time || "-"]),
+    ]
+      .map((row) => row.join(","))
+      .join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `break_data_${range}_${now.toISOString().split("T")[0]}.csv`;
-    link.click();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "users_export.csv";
+    a.click();
   };
 
-  // ---- Timer for "On Break" highlight ----
-  useEffect(() => {
-    const interval = setInterval(fetchTeam, 30000); // refresh every 30s
-    fetchTeam();
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    const timer = setInterval(() => setTeam((t) => [...t]), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  useEffect(() => setLoading(false), []);
-
-  // ---- UI: Login as Admin ----
-  if (!user && !isAdmin && !loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-900 text-white">
-        <div className="bg-gray-800 p-6 rounded-2xl shadow-lg w-80">
-          <h1 className="text-xl font-semibold text-center mb-4">Admin / User Access</h1>
-          <input
-            type="password"
-            placeholder="Enter admin password"
-            className="w-full mb-3 p-2 rounded bg-gray-700 text-white"
-            value={adminPassword}
-            onChange={(e) => setAdminPassword(e.target.value)}
-          />
-          <button
-            className="w-full bg-blue-600 py-2 rounded hover:bg-blue-700"
-            onClick={() => {
-              if (adminPassword === ADMIN_SECRET) setIsAdmin(true);
-              else alert("Incorrect password — showing user dashboard instead.");
-              setUser({ name: "Generic User" });
-            }}
-          >
-            Continue
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // ---- Helper for long breaks ----
-  const isLongBreak = (member) => {
-    if (member.status !== "On Break" || !member.break_start) return false;
-    const diff = (Date.now() - new Date(member.break_start)) / 60000; // mins
-    return diff > 30;
+  // Admin login (Generic)
+  const handleAdminLogin = async (email, password) => {
+    if (email === "admin@supabase.com" && password === "secure123") {
+      setAdmin(true);
+      await fetchUsers();
+    } else {
+      alert("Invalid admin credentials");
+    }
   };
 
-  // ---- Dashboard ----
+  useEffect(() => {
+    fetchUsers();
+  }, []);
+
+  if (loading) return <p className="text-center mt-10">Loading...</p>;
+
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-4">
-      <h1 className="text-2xl font-bold mb-4 text-center">
-        {isAdmin ? "Admin Dashboard" : "User Dashboard"}
-      </h1>
+    <div className="p-6 flex flex-col gap-6 max-w-3xl mx-auto">
+      <h1 className="text-2xl font-bold text-center">Team Work Tracker</h1>
 
-      {isAdmin && (
-        <div className="bg-gray-800 p-4 rounded-xl mb-6">
-          <h2 className="text-lg font-semibold mb-2">Add New User</h2>
-          <div className="flex flex-col sm:flex-row gap-2">
-            <input
-              className="flex-1 p-2 rounded bg-gray-700"
-              placeholder="User name"
-              value={newUserName}
-              onChange={(e) => setNewUserName(e.target.value)}
+      {!admin ? (
+        <Card className="p-4">
+          <CardContent className="flex flex-col gap-3">
+            <h2 className="text-lg font-semibold">Admin Login</h2>
+            <Input
+              placeholder="Email"
+              id="adminEmail"
+              defaultValue="admin@supabase.com"
             />
-            <select
-              className="p-2 rounded bg-gray-700"
-              value={newUserRole}
-              onChange={(e) => setNewUserRole(e.target.value)}
+            <Input
+              placeholder="Password"
+              id="adminPassword"
+              type="password"
+              defaultValue="secure123"
+            />
+            <Button
+              onClick={() =>
+                handleAdminLogin(
+                  document.getElementById("adminEmail").value,
+                  document.getElementById("adminPassword").value
+                )
+              }
             >
-              <option value="user">User</option>
-              <option value="manager">Manager</option>
-              <option value="admin">Admin</option>
-            </select>
-            <button
-              onClick={handleAddUser}
-              className="bg-green-600 px-4 py-2 rounded hover:bg-green-700"
-            >
-              Add
-            </button>
-          </div>
-          {error && <p className="text-red-400 mt-2">{error}</p>}
-        </div>
-      )}
-
-      <div className="overflow-x-auto">
-        <table className="w-full border border-gray-700 rounded-xl">
-          <thead className="bg-gray-800">
-            <tr>
-              <th className="p-2">Name</th>
-              <th className="p-2">Role</th>
-              <th className="p-2">Status</th>
-              <th className="p-2">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {team.map((member) => (
-              <tr
-                key={member.id}
-                className={`text-center ${
-                  isLongBreak(member)
-                    ? "bg-red-800"
-                    : member.status === "On Break"
-                    ? "bg-yellow-700"
-                    : "bg-gray-700"
+              Login
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          <div className="flex justify-between items-center">
+            <Button onClick={handlePunch}>
+              {punchStatus === "Out" ? "Punch In" : "Punch Out"}
+            </Button>
+            <p>
+              Status:{" "}
+              <span
+                className={`font-semibold ${
+                  punchStatus === "In" ? "text-green-600" : "text-red-600"
                 }`}
               >
-                <td className="p-2">{member.name}</td>
-                <td className="p-2 capitalize">{member.role}</td>
-                <td className="p-2">{member.status}</td>
-                <td className="p-2">
-                  {member.status === "On Break" ? (
-                    <button
-                      onClick={() => handlePunchIn(member.id)}
-                      className="bg-blue-600 px-3 py-1 rounded hover:bg-blue-700"
-                    >
-                      Punch In
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => handlePunchOut(member.id)}
-                      className="bg-yellow-600 px-3 py-1 rounded hover:bg-yellow-700"
-                    >
-                      Punch Out
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                {punchStatus}
+              </span>
+            </p>
+            <p className="font-mono">
+              Timer: {Math.floor(timer / 60)}m {timer % 60}s
+            </p>
+          </div>
 
-      {isAdmin && (
-        <div className="flex flex-wrap gap-3 justify-center mt-6">
-          <button
-            onClick={() => handleExport("day")}
-            className="bg-purple-600 px-4 py-2 rounded hover:bg-purple-700"
-          >
-            Export Day
-          </button>
-          <button
-            onClick={() => handleExport("week")}
-            className="bg-purple-600 px-4 py-2 rounded hover:bg-purple-700"
-          >
-            Export Week
-          </button>
-          <button
-            onClick={() => handleExport("month")}
-            className="bg-purple-600 px-4 py-2 rounded hover:bg-purple-700"
-          >
-            Export Month
-          </button>
-          <button
-            onClick={() => handleExport("all")}
-            className="bg-purple-600 px-4 py-2 rounded hover:bg-purple-700"
-          >
-            Export All
-          </button>
-        </div>
+          <Card className="p-4">
+            <CardContent className="flex gap-2">
+              <Input
+                placeholder="Add user name"
+                value={newUser}
+                onChange={(e) => setNewUser(e.target.value)}
+              />
+              <Button onClick={handleAddUser}>Add</Button>
+              <Button variant="secondary" onClick={handleExport}>
+                Export CSV
+              </Button>
+            </CardContent>
+          </Card>
+
+          <div className="grid gap-3">
+            {users.map((u) => (
+              <Card
+                key={u.id}
+                className={`p-3 ${
+                  u.time > 3600 ? "bg-yellow-100" : "bg-white"
+                }`}
+              >
+                <CardContent>
+                  <p className="font-semibold">{u.name}</p>
+                  <p>Status: {u.status || "Idle"}</p>
+                  <p>
+                    Time:{" "}
+                    {u.time
+                      ? `${Math.floor(u.time / 60)}m ${u.time % 60}s`
+                      : "N/A"}
+                  </p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
-};
-
-export default App;
+}

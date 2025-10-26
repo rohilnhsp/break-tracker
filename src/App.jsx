@@ -1,12 +1,10 @@
-import React, { useEffect, useState } from "react";
-import "./App.css"; // optional for extra styles
+import React, { useState, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-// ---- Supabase Client ----
+// ----- Supabase Client -----
 const supabaseUrl = "https://ulgagdsllwkqxluakifk.supabase.co";
 const anonKey =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk";
-
+  "YOUR_ANON_KEY_HERE"; // replace with your Supabase anon key
 const supabase = createClient(supabaseUrl, anonKey);
 
 function App() {
@@ -14,45 +12,32 @@ function App() {
   const [adminLogged, setAdminLogged] = useState(false);
   const [adminLogin, setAdminLogin] = useState({ username: "", password: "" });
   const [exportRange, setExportRange] = useState("daily");
-  const [breakTypes] = useState([
+  const [columnsCache, setColumnsCache] = useState([]);
+  const breakTypes = [
     { label: "☕ Tea", value: "tea" },
     { label: "🍽️ Lunch", value: "lunch" },
     { label: "🥗 Dinner", value: "dinner" },
     { label: "🚻 Bio Break", value: "bio" },
-  ]);
-  const [columnsCache, setColumnsCache] = useState([]);
+  ];
 
-  // Fetch table columns once to avoid PGRST204
+  // Fetch table columns to avoid missing column errors
   const fetchColumns = async () => {
-    try {
-      const { data: columnsData, error } = await supabase
-        .from("information_schema.columns")
-        .select("column_name")
-        .eq("table_name", "teams");
-
-      if (!error) setColumnsCache(columnsData.map((c) => c.column_name));
-    } catch (err) {
-      console.error("Error fetching table columns:", err);
-    }
+    const { data, error } = await supabase
+      .from("information_schema.columns")
+      .select("column_name")
+      .eq("table_name", "teams");
+    if (!error) setColumnsCache(data.map((c) => c.column_name));
   };
 
   const fetchTeams = async () => {
-    try {
-      const { data, error } = await supabase.from("teams").select("*");
-      if (error) console.error("Error fetching teams:", error);
-      else setTeams(data || []);
-    } catch (err) {
-      console.error(err);
-    }
+    const { data, error } = await supabase.from("teams").select("*");
+    if (!error) setTeams(data || []);
   };
 
   useEffect(() => {
     fetchColumns();
     fetchTeams();
-
-    const interval = setInterval(() => {
-      setTeams((prev) => [...prev]); // refresh timers
-    }, 1000);
+    const interval = setInterval(() => setTeams((prev) => [...prev]), 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -68,30 +53,29 @@ function App() {
   };
 
   const punchIn = (team) => {
-    const now = new Date();
     safeUpdateTeam(team.id, {
-      punch_in: now.toISOString(),
+      punch_in: new Date().toISOString(),
       break_type: null,
-      last_break_date: now.toISOString(),
+      last_break_date: new Date().toISOString(),
     });
   };
 
-  const punchOut = (team, selectedBreakType) => {
+  const punchOut = (team) => {
     const now = new Date();
     let additionalSeconds = 0;
     if (team.punch_in) {
-      const start = new Date(team.punch_in);
-      additionalSeconds = Math.floor((now - start) / 1000);
+      additionalSeconds = Math.floor((new Date() - new Date(team.punch_in)) / 1000);
     }
     safeUpdateTeam(team.id, {
       punch_in: null,
       daily_break_seconds: (team.daily_break_seconds || 0) + additionalSeconds,
-      break_type: selectedBreakType || null,
       last_break_date: now.toISOString(),
     });
   };
 
-  const addUser = async (name) => {
+  const addUser = async () => {
+    const name = prompt("Enter new user name:");
+    if (!name) return;
     const newUser = { name };
     if (columnsCache.includes("daily_break_seconds")) newUser.daily_break_seconds = 0;
     if (columnsCache.includes("last_break_date")) newUser.last_break_date = new Date().toISOString();
@@ -107,7 +91,7 @@ function App() {
   };
 
   const handleExport = () => {
-    let csv = "Name,Punch In,Daily Break (s),Break Type\n";
+    let csv = "Name,Punch In,Total Break (s),Break Type\n";
     teams.forEach((t) => {
       csv += `${t.name || ""},${t.punch_in || ""},${t.daily_break_seconds || 0},${t.break_type || ""}\n`;
     });
@@ -119,25 +103,31 @@ function App() {
     a.click();
   };
 
+  const loginAdmin = () => {
+    const username = prompt("Admin Username:");
+    const password = prompt("Admin Password:");
+    if (username === "admin" && password === "password") setAdminLogged(true);
+    else alert("Invalid credentials");
+  };
+
   return (
     <div style={{ padding: 20, fontFamily: "Arial, sans-serif" }}>
       <h1>⏱️ Break Tracker Dashboard</h1>
 
       {/* Admin Button */}
       <div style={{ marginBottom: 20 }}>
-        <button
-          onClick={() => setAdminLogged(!adminLogged)}
-          style={{ padding: "5px 10px", cursor: "pointer" }}
-        >
-          {adminLogged ? "Logout Admin" : "Login Admin"}
-        </button>
+        {adminLogged ? (
+          <button onClick={() => setAdminLogged(false)}>Logout Admin</button>
+        ) : (
+          <button onClick={loginAdmin}>Login Admin</button>
+        )}
       </div>
 
       {/* Admin Panel */}
       {adminLogged && (
         <div style={{ marginBottom: 20, border: "1px solid #ccc", padding: 10 }}>
           <h3>👤 Admin Panel</h3>
-          <button onClick={() => addUser(prompt("Enter user name"))}>➕ Add User</button>
+          <button onClick={addUser}>➕ Add User</button>
           <button onClick={handleExport} style={{ marginLeft: 10 }}>
             💾 Export CSV ({exportRange})
           </button>
@@ -176,6 +166,7 @@ function App() {
               const isLongBreak = (team.daily_break_seconds || 0) >= 3600;
               const punchInTime = team.punch_in ? new Date(team.punch_in) : null;
               const duration = punchInTime ? Math.floor((new Date() - punchInTime) / 1000) : 0;
+
               return (
                 <tr
                   key={team.id}
@@ -192,7 +183,7 @@ function App() {
                     {(team.daily_break_seconds || 0) + duration}s
                   </td>
                   <td style={{ padding: 8 }}>
-                    {team.punch_in ? (
+                    {punchInTime ? (
                       <select
                         value={team.break_type || ""}
                         onChange={(e) => safeUpdateTeam(team.id, { break_type: e.target.value })}
@@ -211,10 +202,7 @@ function App() {
                   {adminLogged && (
                     <td style={{ padding: 8 }}>
                       <button onClick={() => punchIn(team)}>⏯️ Punch In</button>
-                      <button
-                        onClick={() => punchOut(team, team.break_type)}
-                        style={{ marginLeft: 5 }}
-                      >
+                      <button onClick={() => punchOut(team)} style={{ marginLeft: 5 }}>
                         ⏹️ Punch Out
                       </button>
                       <button

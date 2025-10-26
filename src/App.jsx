@@ -1,131 +1,152 @@
-import React, { useEffect, useState } from 'react';
-import { supabase } from './supabaseClient';
-import dayjs from 'dayjs';
-import duration from 'dayjs/plugin/duration';
-dayjs.extend(duration);
+import { useEffect, useState, useRef } from "react";
+import { supabase } from "./supabaseClient"; // make sure supabaseClient is properly configured
+import dayjs from "dayjs";
+import duration from "dayjs/plugin/duration";
 
-const LONG_BREAK_MINUTES = 30;
+dayjs.extend(duration);
 
 export default function App() {
   const [teams, setTeams] = useState([]);
+  const longBreakThreshold = 15 * 60; // highlight if break > 15 minutes
+  const timerRef = useRef();
 
-  // Fetch initial team data
+  // Fetch teams
   const fetchTeams = async () => {
-    const { data, error } = await supabase.from('teams').select('*');
-    if (!error) setTeams(data);
+    const { data, error } = await supabase.from("teams").select("*");
+    if (error) {
+      console.error("Error fetching teams:", error);
+    } else {
+      setTeams(data);
+    }
   };
 
-  useEffect(() => {
-    fetchTeams();
-  }, []);
-
-  // Realtime subscription (Supabase v2)
-  useEffect(() => {
-    const channel = supabase
-      .channel('teams-realtime')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'teams' },
-        (payload) => {
-          if (payload.eventType === 'INSERT') {
-            setTeams((prev) => [...prev, payload.new]);
-          } else if (payload.eventType === 'UPDATE') {
-            setTeams((prev) =>
-              prev.map((t) => (t.id === payload.new.id ? payload.new : t))
-            );
-          } else if (payload.eventType === 'DELETE') {
-            setTeams((prev) => prev.filter((t) => t.id !== payload.old.id));
-          }
-        }
-      )
-      .subscribe();
-
-    return () => supabase.removeChannel(channel);
-  }, []);
-
-  const toggleBreak = async (team) => {
+  // Punch In / Punch Out
+  const handlePunch = async (team) => {
     const now = new Date().toISOString();
     const updates = team.break_start
       ? { break_start: null, break_end: now }
       : { break_start: now, break_end: null };
 
-    const { error } = await supabase.from('teams').update(updates).eq('id', team.id);
-    if (error) console.error('Error updating break:', error);
+    console.log("Updating team:", team.id, updates);
+
+    const { error } = await supabase
+      .from("teams")
+      .update(updates)
+      .eq("id", team.id)
+      .select(); // select() to return updated row
+
+    if (error) {
+      console.error("Error updating break:", error);
+    } else {
+      // Optimistically update UI
+      setTeams((prev) =>
+        prev.map((t) => (t.id === team.id ? { ...t, ...updates } : t))
+      );
+    }
   };
 
-  const getBreakDuration = (team) => {
-    if (!team.break_start) return '00:00:00';
-    const start = dayjs(team.break_start);
-    const end = team.break_end ? dayjs(team.break_end) : dayjs();
-    const diff = dayjs.duration(end.diff(start));
-    const hours = String(diff.hours()).padStart(2, '0');
-    const minutes = String(diff.minutes()).padStart(2, '0');
-    const seconds = String(diff.seconds()).padStart(2, '0');
-    return `${hours}:${minutes}:${seconds}`;
-  };
-
-  // Live timer
+  // Realtime subscription
   useEffect(() => {
-    const interval = setInterval(() => setTeams((prev) => [...prev]), 1000);
-    return () => clearInterval(interval);
+    fetchTeams();
+
+    const subscription = supabase
+      .channel("public:teams")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "teams" },
+        (payload) => {
+          console.log("Realtime update:", payload);
+          fetchTeams(); // refresh data
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(subscription);
+    };
   }, []);
 
+  // Timer for live HH:MM:SS updates
+  useEffect(() => {
+    timerRef.current = setInterval(() => {
+      setTeams((prev) => [...prev]); // trigger re-render every second
+    }, 1000);
+
+    return () => clearInterval(timerRef.current);
+  }, []);
+
+  const formatDuration = (breakStart) => {
+    if (!breakStart) return "00:00:00";
+    const diff = Math.floor((new Date() - new Date(breakStart)) / 1000);
+    const dur = dayjs.duration(diff, "seconds");
+    return `${String(dur.hours()).padStart(2, "0")}:${String(
+      dur.minutes()
+    ).padStart(2, "0")}:${String(dur.seconds()).padStart(2, "0")}`;
+  };
+
   return (
-    <div className="p-8 bg-gray-100 min-h-screen">
-      <h1 className="text-3xl font-bold mb-6">Team Break Dashboard</h1>
-      <table className="min-w-full bg-white shadow-md rounded-lg overflow-hidden">
-        <thead className="bg-gray-200">
-          <tr>
-            <th className="px-4 py-2 text-left">Name</th>
-            <th className="px-4 py-2 text-left">Email</th>
-            <th className="px-4 py-2 text-left">On Break</th>
-            <th className="px-4 py-2 text-left">Break Duration</th>
-            <th className="px-4 py-2 text-left">Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {teams.map((team) => {
-            const isLongBreak =
-              team.break_start &&
-              dayjs().diff(dayjs(team.break_start), 'minute') >= LONG_BREAK_MINUTES;
-            return (
-              <tr
-                key={team.id}
-                className={`border-b ${isLongBreak ? 'bg-red-100 font-semibold' : ''}`}
-              >
-                <td className="px-4 py-2">{team.name}</td>
-                <td className="px-4 py-2">{team.email}</td>
-                <td className="px-4 py-2">
-                  {team.break_start ? (
-                    <span className="bg-green-200 text-green-800 px-2 py-1 rounded-full text-sm">
-                      Yes
-                    </span>
-                  ) : (
-                    <span className="bg-gray-200 text-gray-800 px-2 py-1 rounded-full text-sm">
-                      No
-                    </span>
-                  )}
-                </td>
-                <td className="px-4 py-2 text-blue-600 font-mono">
-                  {getBreakDuration(team)}
-                </td>
-                <td className="px-4 py-2">
-                  <button
-                    onClick={() => toggleBreak(team)}
-                    className={`px-3 py-1 rounded ${
-                      team.break_start
-                        ? 'bg-red-500 text-white hover:bg-red-600'
-                        : 'bg-green-500 text-white hover:bg-green-600'
-                    }`}
-                  >
-                    {team.break_start ? 'Punch Out' : 'Punch In'}
-                  </button>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div className="p-6 bg-gray-100 min-h-screen">
+      <div className="max-w-5xl mx-auto">
+        <h1 className="text-3xl font-bold mb-6">Team Break Dashboard</h1>
+        <table className="w-full table-auto border-collapse bg-white shadow rounded">
+          <thead>
+            <tr className="bg-gray-200">
+              <th className="p-3 text-left">Name</th>
+              <th className="p-3 text-left">Email</th>
+              <th className="p-3 text-left">On Break</th>
+              <th className="p-3 text-left">Break Duration</th>
+              <th className="p-3 text-left">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {teams.map((team) => {
+              const isOnBreak = !!team.break_start;
+              const breakSeconds = team.break_start
+                ? Math.floor((new Date() - new Date(team.break_start)) / 1000)
+                : 0;
+              const longBreak = breakSeconds >= longBreakThreshold;
+
+              return (
+                <tr
+                  key={team.id}
+                  className={`border-b ${
+                    longBreak ? "bg-red-100" : "hover:bg-gray-50"
+                  }`}
+                >
+                  <td className="p-3">{team.name}</td>
+                  <td className="p-3">{team.email}</td>
+                  <td className="p-3">
+                    {isOnBreak ? (
+                      <span className="px-2 py-1 bg-yellow-200 rounded-full text-sm font-semibold">
+                        Yes
+                      </span>
+                    ) : (
+                      <span className="px-2 py-1 bg-green-200 rounded-full text-sm font-semibold">
+                        No
+                      </span>
+                    )}
+                  </td>
+                  <td className="p-3 font-mono">
+                    {formatDuration(team.break_start)}
+                  </td>
+                  <td className="p-3">
+                    <button
+                      className={`px-4 py-2 rounded font-semibold ${
+                        isOnBreak
+                          ? "bg-red-500 text-white hover:bg-red-600"
+                          : "bg-green-500 text-white hover:bg-green-600"
+                      }`}
+                      onClick={() => handlePunch(team)}
+                    >
+                      {isOnBreak ? "Punch Out" : "Punch In"}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

@@ -30,9 +30,56 @@ function App() {
   };
 
   const fetchTeams = async () => {
-    const { data, error } = await supabase.from("teams").select("*");
-    if (!error) setTeams(data || []);
-  };
+  try {
+    const { data, error, status } = await supabase.from("teams").select("*");
+    if (error && status === 404) {
+      console.warn("Teams table not found. Returning empty array.");
+      setTeams([]);
+      return;
+    } else if (error) {
+      console.error("Error fetching teams:", error);
+      return;
+    }
+    setTeams(data || []);
+  } catch (err) {
+    console.error("Unexpected error fetching teams:", err);
+    setTeams([]);
+  }
+};
+
+  const handlePunch = async (teamId, action, breakType = null) => {
+  try {
+    // Prepare update object safely
+    const updateData = {};
+    if (action === "in") {
+      updateData.punch_in = new Date().toISOString();
+    } else if (action === "out") {
+      updateData.punch_out = new Date().toISOString();
+      if (breakType) updateData.break_type = breakType;
+    }
+
+    const { data, error, status } = await supabase
+      .from("teams")
+      .update(updateData)
+      .eq("id", teamId);
+
+    if (error && status === 404) {
+      console.warn("Teams table not found. Punch ignored.");
+      return;
+    } else if (error) {
+      console.error("Error punching in/out:", error);
+      return;
+    }
+
+    // Update local state
+    setTeams((prev) =>
+      prev.map((t) => (t.id === teamId ? { ...t, ...updateData } : t))
+    );
+  } catch (err) {
+    console.error("Unexpected error punching in/out:", err);
+  }
+};
+
 
   useEffect(() => {
     fetchColumns();
@@ -73,16 +120,26 @@ function App() {
     });
   };
 
-  const addUser = async () => {
-    const name = prompt("Enter new user name:");
-    if (!name) return;
-    const newUser = { name };
-    if (columnsCache.includes("daily_break_seconds")) newUser.daily_break_seconds = 0;
-    if (columnsCache.includes("last_break_date")) newUser.last_break_date = new Date().toISOString();
-    const { error } = await supabase.from("teams").insert([newUser]);
-    if (error) console.error("Error adding user:", error);
-    else fetchTeams();
-  };
+  const addUser = async (user) => {
+  try {
+    const { data, error, status } = await supabase
+      .from("teams")
+      .insert([user]);
+
+    if (error && status === 404) {
+      console.warn("Teams table not found. Cannot add user.");
+      return;
+    } else if (error) {
+      console.error("Error adding user:", error);
+      return;
+    }
+
+    setTeams((prev) => [...prev, ...data]);
+  } catch (err) {
+    console.error("Unexpected error adding user:", err);
+  }
+};
+
 
   const removeUser = async (id) => {
     const { error } = await supabase.from("teams").delete().eq("id", id);

@@ -4,7 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 // ----- Supabase Client -----
 const supabaseUrl = "https://ulgagdsllwkqxluakifk.supabase.co";
 const anonKey =
-  "YOUR_ANON_KEY_HERE"; // replace with your Supabase anon key
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk"; // replace with your Supabase anon key
 const supabase = createClient(supabaseUrl, anonKey);
 
 function App() {

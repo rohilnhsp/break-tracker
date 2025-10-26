@@ -1,13 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
-import "./App.css"; // Add Tailwind base styles here
 
-// ---- Supabase Clients ----
+// ---- Supabase Client ----
 const supabaseUrl = "https://ulgagdsllwkqxluakifk.supabase.co";
-const anonKey =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk";
-const serviceKey =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MDE2MjM3OCwiZXhwIjoyMDc1NzM4Mzc4fQ.Wu8NyTeIU5rB_evLHfg2RSTqt9UKjEQEIF-RCfbOvQM";
+const anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk";
+const serviceKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MDE2MjM3OCwiZXhwIjoyMDc1NzM4Mzc4fQ.Wu8NyTeIU5rB_evLHfg2RSTqt9UKjEQEIF-RCfbOvQM";
 
 const supabase = createClient(supabaseUrl, anonKey);
 const supabaseAdmin = createClient(supabaseUrl, serviceKey);
@@ -15,37 +12,24 @@ const supabaseAdmin = createClient(supabaseUrl, serviceKey);
 const BREAK_TYPES = [
   { label: "Tea", emoji: "☕" },
   { label: "Bio", emoji: "🚻" },
-  { label: "Lunch", emoji: "🍔" },
-  { label: "Dinner", emoji: "🍽️" },
+  { label: "Lunch", emoji: "🍽️" },
+  { label: "Dinner", emoji: "🍲" },
 ];
 
-function App() {
+export default function App() {
   const [teams, setTeams] = useState([]);
   const [adminLogged, setAdminLogged] = useState(false);
-  const [adminLoginVisible, setAdminLoginVisible] = useState(false);
-  const [adminCredentials, setAdminCredentials] = useState({
-    username: "",
-    password: "",
-  });
-  const [exportRange, setExportRange] = useState("daily");
+  const [adminLogin, setAdminLogin] = useState({ username: "", password: "" });
+  const [exportDateRange, setExportDateRange] = useState("daily");
 
+  // Fetch teams/users
   const fetchTeams = async () => {
     try {
-      const today = new Date().toISOString().split("T")[0];
-      const { data, error } = await supabase.from("teams").select("*").order("name");
-      if (error) console.log("Fetch teams error:", error);
-
-      if (data) {
-        const updatedData = data.map((team) => {
-          if (!team.last_break_date || team.last_break_date !== today) {
-            return { ...team, daily_break_seconds: 0, last_break_date: today };
-          }
-          return team;
-        });
-        setTeams(updatedData);
-      }
+      const { data, error } = await supabase.from("teams").select("*");
+      if (error) console.error("Fetch teams error:", error);
+      else setTeams(data || []);
     } catch (err) {
-      console.log(err);
+      console.error("Fetch teams exception:", err);
     }
   };
 
@@ -55,246 +39,194 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Live timer for current break
+  // Daily reset logic
   useEffect(() => {
-    const interval = setInterval(() => {
-      setTeams((prev) =>
-        prev.map((team) => {
-          if (team.break_start && !team.break_end) {
-            const start = new Date(team.break_start);
-            const seconds =
-              Math.floor((Date.now() - start.getTime()) / 1000) +
-              (team.current_break_seconds || 0);
-            return { ...team, current_break_seconds: seconds };
-          }
-          return { ...team, current_break_seconds: 0 };
-        })
-      );
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
+    const today = new Date().toISOString().split("T")[0];
+    setTeams(prev =>
+      prev.map(t => {
+        if (!t.last_break_date || t.last_break_date !== today) {
+          return { ...t, daily_break_seconds: 0, last_break_date: today };
+        }
+        return t;
+      })
+    );
+  }, [teams]);
 
+  // Punch in/out
   const punchInOut = async (team, breakType = null) => {
     const now = new Date().toISOString();
-    try {
-      if (!team.break_start) {
-        // Punch in
-        const { error } = await supabase
-          .from("teams")
-          .update({ break_start: now, break_type: breakType?.label || "Tea" })
-          .eq("id", team.id);
-        if (error) throw error;
-      } else {
-        // Punch out
-        const currentBreak =
-          (team.current_break_seconds || 0) + (team.daily_break_seconds || 0);
-        const { error } = await supabase
-          .from("teams")
-          .update({
-            break_start: null,
-            break_end: now,
-            daily_break_seconds: currentBreak,
-          })
-          .eq("id", team.id);
-        if (error) throw error;
-      }
-      fetchTeams();
-    } catch (err) {
-      console.log("Error punching:", err);
-    }
-  };
-
-  const handleAdminLogin = () => {
-    if (
-      adminCredentials.username === "admin" &&
-      adminCredentials.password === "admin123"
-    ) {
-      setAdminLogged(true);
-      setAdminLoginVisible(false);
+    const updatedTeam = { ...team };
+    if (!team.break_start) {
+      // Punch In
+      updatedTeam.break_start = now;
+      updatedTeam.break_type = breakType?.label || "Unknown";
     } else {
-      alert("Wrong credentials");
+      // Punch Out
+      const start = new Date(team.break_start);
+      const diff = Math.floor((new Date() - start) / 1000);
+      updatedTeam.daily_break_seconds = (team.daily_break_seconds || 0) + diff;
+      updatedTeam.break_start = null;
+      updatedTeam.break_type = null;
     }
-  };
 
-  const addUser = async () => {
-    const name = prompt("Enter user name:");
-    if (!name) return;
     try {
-      const { error } = await supabaseAdmin
+      const { data, error } = await supabaseAdmin
         .from("teams")
-        .insert([
-          { name, daily_break_seconds: 0, last_break_date: new Date().toISOString().split("T")[0] },
-        ]);
-      if (error) throw error;
+        .update({
+          break_start: updatedTeam.break_start,
+          break_type: updatedTeam.break_type,
+          daily_break_seconds: updatedTeam.daily_break_seconds || 0,
+          last_break_date: updatedTeam.last_break_date || new Date().toISOString().split("T")[0],
+        })
+        .eq("id", team.id);
+
+      if (error) console.error("Error punching in/out:", error);
       fetchTeams();
     } catch (err) {
-      console.log("Error adding user:", err);
+      console.error("Punch in/out exception:", err);
     }
   };
 
-  const removeUser = async (teamId) => {
-    if (!window.confirm("Remove this user?")) return;
+  // Add User
+  const addUser = async (name) => {
     try {
-      const { error } = await supabaseAdmin.from("teams").delete().eq("id", teamId);
-      if (error) throw error;
-      fetchTeams();
+      const today = new Date().toISOString().split("T")[0];
+      const { data, error } = await supabaseAdmin
+        .from("teams")
+        .insert([{ name, daily_break_seconds: 0, last_break_date: today }]);
+      if (error) console.error("Error adding user:", error);
+      else fetchTeams();
     } catch (err) {
-      console.log("Error removing user:", err);
+      console.error("Add user exception:", err);
     }
   };
 
-  const exportData = () => {
-    const date = new Date();
-    let filtered = [...teams];
-    if (exportRange === "daily") {
-      const today = date.toISOString().split("T")[0];
-      filtered = filtered.filter((t) => t.last_break_date === today);
-    } else if (exportRange === "weekly") {
-      const start = new Date(date);
-      start.setDate(date.getDate() - 7);
-      filtered = filtered.filter((t) => new Date(t.last_break_date) >= start);
-    } else if (exportRange === "monthly") {
-      const start = new Date(date);
-      start.setMonth(date.getMonth() - 1);
-      filtered = filtered.filter((t) => new Date(t.last_break_date) >= start);
+  // Remove User
+  const removeUser = async (id) => {
+    try {
+      const { error } = await supabaseAdmin.from("teams").delete().eq("id", id);
+      if (error) console.error("Remove user error:", error);
+      else fetchTeams();
+    } catch (err) {
+      console.error("Remove user exception:", err);
     }
-
-    const csv = [
-      ["Name", "Daily Break (s)", "Current Break (s)", "Break Type"],
-      ...filtered.map((t) => [
-        t.name,
-        t.daily_break_seconds || 0,
-        t.current_break_seconds || 0,
-        t.break_type || "",
-      ]),
-    ]
-      .map((e) => e.join(","))
-      .join("\n");
-
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "break_data.csv";
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
-  const formatTime = (sec) => {
-    const h = Math.floor(sec / 3600)
-      .toString()
-      .padStart(2, "0");
-    const m = Math.floor((sec % 3600) / 60)
-      .toString()
-      .padStart(2, "0");
-    const s = Math.floor(sec % 60)
-      .toString()
-      .padStart(2, "0");
-    return `${h}:${m}:${s}`;
+  // Export CSV
+  const exportCSV = () => {
+    const headers = ["Name", "Break Type", "Daily Break (s)"];
+    const rows = teams.map(t => [
+      t.name,
+      t.break_type || "-",
+      t.daily_break_seconds || 0,
+    ]);
+
+    let csvContent = "data:text/csv;charset=utf-8," + headers.join(",") + "\n";
+    rows.forEach(r => {
+      csvContent += r.join(",") + "\n";
+    });
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `breaks_${new Date().toISOString()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Admin Login
+  const handleAdminLogin = () => {
+    // Generic credentials
+    if (adminLogin.username === "admin" && adminLogin.password === "admin123") {
+      setAdminLogged(true);
+      setAdminLogin({ username: "", password: "" });
+    } else alert("Wrong admin credentials!");
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 p-4">
-      <header className="flex justify-between items-center mb-4">
-        <h1 className="text-2xl font-bold text-gray-800">Break Tracker</h1>
-        <button
-          className="px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600"
-          onClick={() => setAdminLoginVisible(!adminLoginVisible)}
-        >
-          Admin
-        </button>
-      </header>
+    <div className="p-4 font-sans">
+      <h1 className="text-2xl font-bold mb-4">Break Tracker Dashboard</h1>
 
-      {adminLoginVisible && !adminLogged && (
-        <div className="mb-4 p-4 bg-white shadow rounded max-w-sm">
-          <h2 className="text-lg font-semibold mb-2">Admin Login</h2>
+      {!adminLogged && (
+        <div className="mb-4">
           <input
-            type="text"
-            placeholder="Username"
-            className="w-full mb-2 p-2 border rounded"
-            value={adminCredentials.username}
-            onChange={(e) =>
-              setAdminCredentials({ ...adminCredentials, username: e.target.value })
-            }
+            className="border p-1 mr-2"
+            placeholder="Admin Username"
+            value={adminLogin.username}
+            onChange={e => setAdminLogin(prev => ({ ...prev, username: e.target.value }))}
           />
           <input
+            className="border p-1 mr-2"
             type="password"
             placeholder="Password"
-            className="w-full mb-2 p-2 border rounded"
-            value={adminCredentials.password}
-            onChange={(e) =>
-              setAdminCredentials({ ...adminCredentials, password: e.target.value })
-            }
+            value={adminLogin.password}
+            onChange={e => setAdminLogin(prev => ({ ...prev, password: e.target.value }))}
           />
-          <button
-            className="px-3 py-1 rounded bg-green-500 text-white hover:bg-green-600"
-            onClick={handleAdminLogin}
-          >
-            Login
+          <button className="px-2 py-1 bg-blue-500 text-white rounded" onClick={handleAdminLogin}>
+            Admin Login
           </button>
         </div>
       )}
 
       {adminLogged && (
-        <div className="flex gap-2 mb-4">
+        <div className="mb-4 flex gap-2">
           <button
-            className="px-3 py-1 rounded bg-green-500 text-white hover:bg-green-600"
-            onClick={addUser}
+            className="px-2 py-1 bg-green-500 text-white rounded"
+            onClick={() => {
+              const name = prompt("Enter user name");
+              if (name) addUser(name);
+            }}
           >
             Add User
           </button>
           <button
-            className="px-3 py-1 rounded bg-red-500 text-white hover:bg-red-600"
-            onClick={exportData}
+            className="px-2 py-1 bg-gray-500 text-white rounded"
+            onClick={exportCSV}
           >
-            Export {exportRange}
+            Export CSV
           </button>
-          <select
-            className="border rounded p-1"
-            value={exportRange}
-            onChange={(e) => setExportRange(e.target.value)}
-          >
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-            <option value="monthly">Monthly</option>
-          </select>
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <table className="min-w-full bg-white border border-gray-200 rounded shadow-sm">
-          <thead className="bg-gray-200 sticky top-0">
-            <tr>
-              <th className="p-2 border-b">Name</th>
-              <th className="p-2 border-b">Current Break</th>
-              <th className="p-2 border-b">Today's Total Break</th>
-              <th className="p-2 border-b">Break Type</th>
-              <th className="p-2 border-b">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {teams.map((team, idx) => {
-              const isLongBreak = (team.current_break_seconds || 0) >= 15 * 60;
-              return (
-                <tr
-                  key={team.id}
-                  className={idx % 2 === 0 ? "bg-gray-50" : "bg-white"}
-                >
-                  <td className="p-2 border-b">{team.name}</td>
-                  <td className={`p-2 border-b ${isLongBreak ? "text-red-500 font-bold" : ""}`}>
-                    {formatTime(team.current_break_seconds || 0)}
-                  </td>
-                  <td className="p-2 border-b">{formatTime(team.daily_break_seconds || 0)}</td>
-                  <td className="p-2 border-b">
-                    {team.break_type ? team.break_type + " " + BREAK_TYPES.find(b => b.label === team.break_type)?.emoji : "-"}
-                  </td>
-                  <td className="p-2 border-b flex gap-2">
-                    {!team.break_start ? (
+      <table className="min-w-full border-collapse border border-gray-200 shadow-sm">
+        <thead className="bg-gray-100 sticky top-0">
+          <tr>
+            <th className="p-2 border-b">Name</th>
+            <th className="p-2 border-b">Break Type</th>
+            <th className="p-2 border-b">Daily Break ⏱️</th>
+            <th className="p-2 border-b">Current Break ⏱️</th>
+            <th className="p-2 border-b">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {teams.map(team => {
+            const currentBreakSeconds = team.break_start
+              ? Math.floor((new Date() - new Date(team.break_start)) / 1000)
+              : 0;
+            return (
+              <tr
+                key={team.id}
+                className={team.break_start ? "bg-yellow-50" : "bg-white"}
+              >
+                <td className="p-2 border-b">{team.name}</td>
+                <td className="p-2 border-b">{team.break_type || "-"}</td>
+                <td className="p-2 border-b">{team.daily_break_seconds || 0}</td>
+                <td className="p-2 border-b">{currentBreakSeconds}</td>
+                <td className="p-2 border-b flex gap-2 items-center">
+                  {!team.break_start ? (
+                    <>
                       <select
                         className="border rounded p-1"
-                        onChange={(e) =>
-                          punchInOut(team, BREAK_TYPES.find(b => b.label === e.target.value))
-                        }
+                        value={team.selectedBreak || ""}
+                        onChange={(e) => {
+                          const selected = e.target.value;
+                          setTeams(prev =>
+                            prev.map(t =>
+                              t.id === team.id ? { ...t, selectedBreak: selected } : t
+                            )
+                          );
+                        }}
                       >
                         <option value="">Select Break</option>
                         {BREAK_TYPES.map((b) => (
@@ -303,31 +235,38 @@ function App() {
                           </option>
                         ))}
                       </select>
-                    ) : (
                       <button
-                        className="px-2 py-1 rounded bg-red-500 text-white hover:bg-red-600"
-                        onClick={() => punchInOut(team)}
+                        className="px-2 py-1 rounded bg-green-500 text-white hover:bg-green-600"
+                        onClick={() =>
+                          punchInOut(team, BREAK_TYPES.find(b => b.label === team.selectedBreak))
+                        }
+                        disabled={!team.selectedBreak}
                       >
-                        Punch Out
+                        Punch In
                       </button>
-                    )}
-                    {adminLogged && (
-                      <button
-                        className="px-2 py-1 rounded bg-gray-500 text-white hover:bg-gray-600"
-                        onClick={() => removeUser(team.id)}
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                    </>
+                  ) : (
+                    <button
+                      className="px-2 py-1 rounded bg-red-500 text-white hover:bg-red-600"
+                      onClick={() => punchInOut(team)}
+                    >
+                      Punch Out
+                    </button>
+                  )}
+                  {adminLogged && (
+                    <button
+                      className="px-2 py-1 rounded bg-gray-500 text-white hover:bg-gray-600"
+                      onClick={() => removeUser(team.id)}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
-
-export default App;

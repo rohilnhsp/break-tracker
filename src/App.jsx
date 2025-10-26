@@ -1,67 +1,58 @@
 import React, { useEffect, useState } from 'react';
-import { supabase } from './supabaseClient'; // your supabase client
+import { supabase } from './supabaseClient';
 import dayjs from 'dayjs';
 import duration from 'dayjs/plugin/duration';
 dayjs.extend(duration);
 
-const LONG_BREAK_MINUTES = 30; // highlight users on break longer than this
+const LONG_BREAK_MINUTES = 30;
 
 export default function App() {
   const [teams, setTeams] = useState([]);
 
   // Fetch initial team data
+  const fetchTeams = async () => {
+    const { data, error } = await supabase.from('teams').select('*');
+    if (!error) setTeams(data);
+  };
+
   useEffect(() => {
-    const fetchTeams = async () => {
-      const { data, error } = await supabase.from('teams').select('*');
-      if (!error) setTeams(data);
-    };
     fetchTeams();
   }, []);
 
-  // Realtime subscription using Supabase v2 syntax
+  // Realtime subscription (Supabase v2)
   useEffect(() => {
     const channel = supabase
-      .channel('public:teams')
+      .channel('teams-realtime')
       .on(
         'postgres_changes',
-        {
-          event: '*', // listen to INSERT, UPDATE, DELETE
-          schema: 'public',
-          table: 'teams',
-        },
+        { event: '*', schema: 'public', table: 'teams' },
         (payload) => {
-          setTeams((prev) => {
-            const index = prev.findIndex((t) => t.id === payload.new?.id);
-            if (payload.eventType === 'DELETE') {
-              return prev.filter((t) => t.id !== payload.old.id);
-            }
-            if (index === -1) return [...prev, payload.new];
-            const updated = [...prev];
-            updated[index] = payload.new;
-            return updated;
-          });
+          if (payload.eventType === 'INSERT') {
+            setTeams((prev) => [...prev, payload.new]);
+          } else if (payload.eventType === 'UPDATE') {
+            setTeams((prev) =>
+              prev.map((t) => (t.id === payload.new.id ? payload.new : t))
+            );
+          } else if (payload.eventType === 'DELETE') {
+            setTeams((prev) => prev.filter((t) => t.id !== payload.old.id));
+          }
         }
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel); // cleanup
-    };
+    return () => supabase.removeChannel(channel);
   }, []);
 
-  // Handle punch in/out
   const toggleBreak = async (team) => {
-    const isOnBreak = !!team.break_start;
     const now = new Date().toISOString();
+    const updates = team.break_start
+      ? { break_start: null, break_end: now }
+      : { break_start: now, break_end: null };
 
-    const updates = isOnBreak
-      ? { break_start: null, break_end: now } // punch out
-      : { break_start: now, break_end: null }; // punch in
-
-    await supabase.from('teams').update(updates).eq('id', team.id);
+    const { error } = await supabase.from('teams').update(updates).eq('id', team.id);
+    if (error) console.error('Error updating break:', error);
   };
 
-  // Live HH:MM:SS timer
   const getBreakDuration = (team) => {
     if (!team.break_start) return '00:00:00';
     const start = dayjs(team.break_start);
@@ -73,11 +64,9 @@ export default function App() {
     return `${hours}:${minutes}:${seconds}`;
   };
 
-  // Force update every second for live timers
+  // Live timer
   useEffect(() => {
-    const interval = setInterval(() => {
-      setTeams((prev) => [...prev]); // trigger re-render
-    }, 1000);
+    const interval = setInterval(() => setTeams((prev) => [...prev]), 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -102,9 +91,7 @@ export default function App() {
             return (
               <tr
                 key={team.id}
-                className={`border-b ${
-                  isLongBreak ? 'bg-red-100 font-semibold' : ''
-                }`}
+                className={`border-b ${isLongBreak ? 'bg-red-100 font-semibold' : ''}`}
               >
                 <td className="px-4 py-2">{team.name}</td>
                 <td className="px-4 py-2">{team.email}</td>
@@ -119,14 +106,8 @@ export default function App() {
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-2">
-                  {team.break_start ? (
-                    <span className="text-blue-600 font-mono">
-                      {getBreakDuration(team)}
-                    </span>
-                  ) : (
-                    '00:00:00'
-                  )}
+                <td className="px-4 py-2 text-blue-600 font-mono">
+                  {getBreakDuration(team)}
                 </td>
                 <td className="px-4 py-2">
                   <button

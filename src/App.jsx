@@ -17,10 +17,11 @@ function App() {
   const [teams, setTeams] = useState([]);
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [users, setUsers] = useState([]);
+  const [newUser, setNewUser] = useState({ name: "", email: "", role: "user" });
 
   const intervalRef = useRef();
 
-  // Fetch logged-in user
   useEffect(() => {
     const getUser = async () => {
       const { data: { user }, error } = await supabase.auth.getUser();
@@ -31,7 +32,6 @@ function App() {
     getUser();
   }, []);
 
-  // Fetch teams
   useEffect(() => {
     const fetchTeams = async () => {
       const { data, error } = await supabase.from("teams").select("*");
@@ -40,7 +40,6 @@ function App() {
     };
     fetchTeams();
 
-    // Subscribe to real-time updates
     const subscription = supabase
       .channel("public:teams")
       .on(
@@ -57,7 +56,6 @@ function App() {
     return () => supabase.removeChannel(subscription);
   }, []);
 
-  // Live timers update
   useEffect(() => {
     intervalRef.current = setInterval(() => {
       setTeams((prev) =>
@@ -87,11 +85,10 @@ function App() {
         .from("teams")
         .update(updates)
         .eq("id", team.id)
-        .select(); // important to return updated row
+        .select();
 
       if (error) throw error;
 
-      // Update local state immediately
       setTeams((prev) =>
         prev.map((t) => (t.id === team.id ? { ...t, ...data[0] } : t))
       );
@@ -101,7 +98,6 @@ function App() {
     }
   };
 
-  // CSV Export
   const exportCSV = (filter = "all") => {
     let filteredTeams = teams;
 
@@ -151,6 +147,29 @@ function App() {
     document.body.removeChild(link);
   };
 
+  // Fetch all users (admin only)
+  useEffect(() => {
+    const fetchUsers = async () => {
+      if (!user?.role) return;
+      const { data, error } = await supabase.from("users").select("*");
+      if (error) console.error(error);
+      else setUsers(data);
+    };
+    fetchUsers();
+  }, [user]);
+
+  const addUser = async () => {
+    try {
+      const { data, error } = await supabase.from("users").insert([newUser]).select();
+      if (error) throw error;
+      setUsers((prev) => [...prev, ...data]);
+      setNewUser({ name: "", email: "", role: "user" });
+    } catch (err) {
+      console.error(err);
+      alert("Failed to add user");
+    }
+  };
+
   if (loading) return <div className="p-6">Loading user...</div>;
 
   const isAdmin = user?.role === "admin" || user?.role === "manager";
@@ -160,26 +179,83 @@ function App() {
       <h1 className="text-2xl font-bold mb-4">Team Break Dashboard</h1>
 
       {isAdmin && (
-        <div className="mb-4 flex gap-2">
-          <button
-            className="bg-blue-500 text-white px-4 py-2 rounded"
-            onClick={() => exportCSV("daily")}
-          >
-            Export Daily
-          </button>
-          <button
-            className="bg-blue-500 text-white px-4 py-2 rounded"
-            onClick={() => exportCSV("weekly")}
-          >
-            Export Weekly
-          </button>
-          <button
-            className="bg-blue-500 text-white px-4 py-2 rounded"
-            onClick={() => exportCSV("monthly")}
-          >
-            Export Monthly
-          </button>
-        </div>
+        <>
+          <div className="mb-4 flex gap-2">
+            <button
+              className="bg-blue-500 text-white px-4 py-2 rounded"
+              onClick={() => exportCSV("daily")}
+            >
+              Export Daily
+            </button>
+            <button
+              className="bg-blue-500 text-white px-4 py-2 rounded"
+              onClick={() => exportCSV("weekly")}
+            >
+              Export Weekly
+            </button>
+            <button
+              className="bg-blue-500 text-white px-4 py-2 rounded"
+              onClick={() => exportCSV("monthly")}
+            >
+              Export Monthly
+            </button>
+          </div>
+
+          {/* Add User Form */}
+          <div className="mb-6 p-4 border rounded bg-gray-50">
+            <h2 className="font-bold mb-2">Add / Assign User</h2>
+            <input
+              className="border px-2 py-1 mr-2"
+              placeholder="Name"
+              value={newUser.name}
+              onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
+            />
+            <input
+              className="border px-2 py-1 mr-2"
+              placeholder="Email"
+              value={newUser.email}
+              onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+            />
+            <select
+              className="border px-2 py-1 mr-2"
+              value={newUser.role}
+              onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
+            >
+              <option value="user">User</option>
+              <option value="manager">Manager</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button
+              className="bg-green-500 text-white px-3 py-1 rounded"
+              onClick={addUser}
+            >
+              Add User
+            </button>
+          </div>
+
+          {/* Existing users list */}
+          <div className="mb-6">
+            <h3 className="font-bold mb-2">Users</h3>
+            <table className="min-w-full border border-gray-300">
+              <thead className="bg-gray-200">
+                <tr>
+                  <th className="border px-2 py-1">Name</th>
+                  <th className="border px-2 py-1">Email</th>
+                  <th className="border px-2 py-1">Role</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((u) => (
+                  <tr key={u.id}>
+                    <td className="border px-2 py-1">{u.name}</td>
+                    <td className="border px-2 py-1">{u.email}</td>
+                    <td className="border px-2 py-1">{u.role}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       <table className="min-w-full border border-gray-300">
@@ -196,7 +272,7 @@ function App() {
           {teams.map((team) => {
             const onBreak = team.break_start && !team.break_end;
             const duration = team.liveDuration || 0;
-            const longBreak = duration > 30 * 60; // highlight if more than 30 mins
+            const longBreak = duration > 30 * 60;
 
             return (
               <tr
@@ -207,9 +283,7 @@ function App() {
                 <td className="border px-2 py-1">{team.email}</td>
                 <td className="border px-2 py-1">
                   {onBreak ? (
-                    <span className="bg-yellow-200 px-2 py-1 rounded">
-                      Yes
-                    </span>
+                    <span className="bg-yellow-200 px-2 py-1 rounded">Yes</span>
                   ) : (
                     <span className="bg-green-200 px-2 py-1 rounded">No</span>
                   )}

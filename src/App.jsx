@@ -141,11 +141,27 @@ function App() {
 };
 
 
-  const removeUser = async (id) => {
-    const { error } = await supabase.from("teams").delete().eq("id", id);
-    if (error) console.error("Error removing user:", error);
-    else fetchTeams();
-  };
+  const removeUser = async (teamId) => {
+  try {
+    const { data, error, status } = await supabase
+      .from("teams")
+      .delete()
+      .eq("id", teamId);
+
+    if (error && status === 404) {
+      console.warn("Teams table not found. Cannot remove user.");
+      return;
+    } else if (error) {
+      console.error("Error removing user:", error);
+      return;
+    }
+
+    setTeams((prev) => prev.filter((t) => t.id !== teamId));
+  } catch (err) {
+    console.error("Unexpected error removing user:", err);
+  }
+};
+
 
   const handleExport = () => {
     let csv = "Name,Punch In,Total Break (s),Break Type\n";

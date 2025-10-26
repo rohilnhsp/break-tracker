@@ -95,24 +95,30 @@ export default function App() {
 
   // Punch In / Out
   const handlePunch = async (team) => {
-    try {
-      const now = new Date().toISOString();
-      const updates =
-        !team.break_start || team.break_end
-          ? { break_start: now, break_end: null }
-          : { break_end: now };
+  try {
+    const now = new Date().toISOString();
+    const updates =
+      !team.break_start || team.break_end
+        ? { break_start: now, break_end: null }
+        : { break_end: now };
 
-      const { error } = await supabase
-        .from("teams")
-        .update(updates)
-        .eq("id", team.id);
+    const { data, error } = await supabase
+      .from("teams")
+      .update(updates)
+      .eq("id", team.id)
+      .select(); // <--- important
 
-      if (error) throw error;
-    } catch (err) {
-      console.error("Error updating break:", err);
-      alert("Failed to update break");
-    }
-  };
+    if (error) throw error;
+
+    // Update local state immediately
+    setTeams((prev) =>
+      prev.map((t) => (t.id === team.id ? { ...t, ...data[0] } : t))
+    );
+  } catch (err) {
+    console.error("Error updating break:", err);
+    alert("Failed to update break");
+  }
+};
 
   // Add user
   const handleAddUser = async () => {

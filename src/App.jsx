@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
-import "./App.css";
+import "./App.css"; // Add Tailwind base styles here
 
 // ---- Supabase Clients ----
 const supabaseUrl = "https://ulgagdsllwkqxluakifk.supabase.co";
@@ -12,11 +12,10 @@ const serviceKey =
 const supabase = createClient(supabaseUrl, anonKey);
 const supabaseAdmin = createClient(supabaseUrl, serviceKey);
 
-// Break options with emojis
 const BREAK_TYPES = [
   { label: "Tea", emoji: "☕" },
-  { label: "Lunch", emoji: "🍔" },
   { label: "Bio", emoji: "🚻" },
+  { label: "Lunch", emoji: "🍔" },
   { label: "Dinner", emoji: "🍽️" },
 ];
 
@@ -33,14 +32,10 @@ function App() {
   const fetchTeams = async () => {
     try {
       const today = new Date().toISOString().split("T")[0];
-      const { data, error } = await supabase
-        .from("teams")
-        .select("*")
-        .order("name");
+      const { data, error } = await supabase.from("teams").select("*").order("name");
       if (error) console.log("Fetch teams error:", error);
 
       if (data) {
-        // Reset daily break if date changed
         const updatedData = data.map((team) => {
           if (!team.last_break_date || team.last_break_date !== today) {
             return { ...team, daily_break_seconds: 0, last_break_date: today };
@@ -56,7 +51,7 @@ function App() {
 
   useEffect(() => {
     fetchTeams();
-    const interval = setInterval(fetchTeams, 30000);
+    const interval = setInterval(fetchTeams, 30000); // refresh every 30s
     return () => clearInterval(interval);
   }, []);
 
@@ -79,19 +74,14 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  const punchInOut = async (team) => {
+  const punchInOut = async (team, breakType = null) => {
     const now = new Date().toISOString();
     try {
       if (!team.break_start) {
-        // Prompt user to select break type
-        const type = prompt(
-          `Select break type:\n${BREAK_TYPES.map((b, i) => `${i + 1}. ${b.label}`).join("\n")}`
-        );
-        const selected = BREAK_TYPES[parseInt(type) - 1] || BREAK_TYPES[0];
-
+        // Punch in
         const { error } = await supabase
           .from("teams")
-          .update({ break_start: now, break_type: selected.label })
+          .update({ break_start: now, break_type: breakType?.label || "Tea" })
           .eq("id", team.id);
         if (error) throw error;
       } else {
@@ -104,7 +94,6 @@ function App() {
             break_start: null,
             break_end: now,
             daily_break_seconds: currentBreak,
-            break_type: null,
           })
           .eq("id", team.id);
         if (error) throw error;
@@ -131,9 +120,11 @@ function App() {
     const name = prompt("Enter user name:");
     if (!name) return;
     try {
-      const { error } = await supabaseAdmin.from("teams").insert([
-        { name, daily_break_seconds: 0, last_break_date: new Date().toISOString().split("T")[0] },
-      ]);
+      const { error } = await supabaseAdmin
+        .from("teams")
+        .insert([
+          { name, daily_break_seconds: 0, last_break_date: new Date().toISOString().split("T")[0] },
+        ]);
       if (error) throw error;
       fetchTeams();
     } catch (err) {
@@ -152,6 +143,43 @@ function App() {
     }
   };
 
+  const exportData = () => {
+    const date = new Date();
+    let filtered = [...teams];
+    if (exportRange === "daily") {
+      const today = date.toISOString().split("T")[0];
+      filtered = filtered.filter((t) => t.last_break_date === today);
+    } else if (exportRange === "weekly") {
+      const start = new Date(date);
+      start.setDate(date.getDate() - 7);
+      filtered = filtered.filter((t) => new Date(t.last_break_date) >= start);
+    } else if (exportRange === "monthly") {
+      const start = new Date(date);
+      start.setMonth(date.getMonth() - 1);
+      filtered = filtered.filter((t) => new Date(t.last_break_date) >= start);
+    }
+
+    const csv = [
+      ["Name", "Daily Break (s)", "Current Break (s)", "Break Type"],
+      ...filtered.map((t) => [
+        t.name,
+        t.daily_break_seconds || 0,
+        t.current_break_seconds || 0,
+        t.break_type || "",
+      ]),
+    ]
+      .map((e) => e.join(","))
+      .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "break_data.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const formatTime = (sec) => {
     const h = Math.floor(sec / 3600)
       .toString()
@@ -168,7 +196,7 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-100 p-4">
       <header className="flex justify-between items-center mb-4">
-        <h1 className="text-2xl font-bold text-gray-800">Break Tracker 🕒</h1>
+        <h1 className="text-2xl font-bold text-gray-800">Break Tracker</h1>
         <button
           className="px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600"
           onClick={() => setAdminLoginVisible(!adminLoginVisible)}
@@ -215,6 +243,12 @@ function App() {
           >
             Add User
           </button>
+          <button
+            className="px-3 py-1 rounded bg-red-500 text-white hover:bg-red-600"
+            onClick={exportData}
+          >
+            Export {exportRange}
+          </button>
           <select
             className="border rounded p-1"
             value={exportRange}
@@ -228,13 +262,72 @@ function App() {
       )}
 
       <div className="overflow-x-auto">
-        <table className="min-w-full bg-white rounded shadow overflow-hidden">
+        <table className="min-w-full bg-white border border-gray-200 rounded shadow-sm">
           <thead className="bg-gray-200 sticky top-0">
             <tr>
-              <th className="px-4 py-2 text-left">Name</th>
-              <th className="px-4 py-2 text-left">Current Break</th>
-              <th className="px-4 py-2 text-left">Today's Total Break</th>
-              <th className="px-4 py-2 text-left">Break Type</th>
-              <th className="px-4 py-2 text-left">Action</th>
-              {adminLogged && <th className="px-4 py-2 text-left">Remove</th>}
-            </tr
+              <th className="p-2 border-b">Name</th>
+              <th className="p-2 border-b">Current Break</th>
+              <th className="p-2 border-b">Today's Total Break</th>
+              <th className="p-2 border-b">Break Type</th>
+              <th className="p-2 border-b">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {teams.map((team, idx) => {
+              const isLongBreak = (team.current_break_seconds || 0) >= 15 * 60;
+              return (
+                <tr
+                  key={team.id}
+                  className={idx % 2 === 0 ? "bg-gray-50" : "bg-white"}
+                >
+                  <td className="p-2 border-b">{team.name}</td>
+                  <td className={`p-2 border-b ${isLongBreak ? "text-red-500 font-bold" : ""}`}>
+                    {formatTime(team.current_break_seconds || 0)}
+                  </td>
+                  <td className="p-2 border-b">{formatTime(team.daily_break_seconds || 0)}</td>
+                  <td className="p-2 border-b">
+                    {team.break_type ? team.break_type + " " + BREAK_TYPES.find(b => b.label === team.break_type)?.emoji : "-"}
+                  </td>
+                  <td className="p-2 border-b flex gap-2">
+                    {!team.break_start ? (
+                      <select
+                        className="border rounded p-1"
+                        onChange={(e) =>
+                          punchInOut(team, BREAK_TYPES.find(b => b.label === e.target.value))
+                        }
+                      >
+                        <option value="">Select Break</option>
+                        {BREAK_TYPES.map((b) => (
+                          <option key={b.label} value={b.label}>
+                            {b.emoji} {b.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <button
+                        className="px-2 py-1 rounded bg-red-500 text-white hover:bg-red-600"
+                        onClick={() => punchInOut(team)}
+                      >
+                        Punch Out
+                      </button>
+                    )}
+                    {adminLogged && (
+                      <button
+                        className="px-2 py-1 rounded bg-gray-500 text-white hover:bg-gray-600"
+                        onClick={() => removeUser(team.id)}
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+export default App;

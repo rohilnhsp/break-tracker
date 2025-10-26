@@ -1,297 +1,211 @@
 import React, { useState, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-// ----- Supabase Client -----
+// ---- Supabase Client ----
 const supabaseUrl = "https://ulgagdsllwkqxluakifk.supabase.co";
-const anonKey =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk"; // replace with your Supabase anon key
+const anonKey = "YOUR_ANON_KEY"; // replace with your anon key
 const supabase = createClient(supabaseUrl, anonKey);
+
+const breakOptions = [
+  { label: "☕ Tea Break", value: "tea" },
+  { label: "🍽️ Lunch Break", value: "lunch" },
+  { label: "🍴 Dinner Break", value: "dinner" },
+  { label: "🚻 Bio Break", value: "bio" },
+];
 
 function App() {
   const [teams, setTeams] = useState([]);
   const [adminLogged, setAdminLogged] = useState(false);
   const [adminLogin, setAdminLogin] = useState({ username: "", password: "" });
-  const [exportRange, setExportRange] = useState("daily");
-  const [columnsCache, setColumnsCache] = useState([]);
-  const breakTypes = [
-    { label: "☕ Tea", value: "tea" },
-    { label: "🍽️ Lunch", value: "lunch" },
-    { label: "🥗 Dinner", value: "dinner" },
-    { label: "🚻 Bio Break", value: "bio" },
-  ];
-
-  // Fetch table columns to avoid missing column errors
-  const fetchColumns = async () => {
-    const { data, error } = await supabase
-      .from("information_schema.columns")
-      .select("column_name")
-      .eq("table_name", "teams");
-    if (!error) setColumnsCache(data.map((c) => c.column_name));
-  };
-
-  const fetchTeams = async () => {
-  try {
-    const { data, error, status } = await supabase.from("teams").select("*");
-    if (error && status === 404) {
-      console.warn("Teams table not found. Returning empty array.");
-      setTeams([]);
-      return;
-    } else if (error) {
-      console.error("Error fetching teams:", error);
-      return;
-    }
-    setTeams(data || []);
-  } catch (err) {
-    console.error("Unexpected error fetching teams:", err);
-    setTeams([]);
-  }
-};
-
-  const handlePunch = async (teamId, action, breakType = null) => {
-  try {
-    // Prepare update object safely
-    const updateData = {};
-    if (action === "in") {
-      updateData.punch_in = new Date().toISOString();
-    } else if (action === "out") {
-      updateData.punch_out = new Date().toISOString();
-      if (breakType) updateData.break_type = breakType;
-    }
-
-    const { data, error, status } = await supabase
-      .from("teams")
-      .update(updateData)
-      .eq("id", teamId);
-
-    if (error && status === 404) {
-      console.warn("Teams table not found. Punch ignored.");
-      return;
-    } else if (error) {
-      console.error("Error punching in/out:", error);
-      return;
-    }
-
-    // Update local state
-    setTeams((prev) =>
-      prev.map((t) => (t.id === teamId ? { ...t, ...updateData } : t))
-    );
-  } catch (err) {
-    console.error("Unexpected error punching in/out:", err);
-  }
-};
-
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchColumns();
     fetchTeams();
-    const interval = setInterval(() => setTeams((prev) => [...prev]), 1000);
-    return () => clearInterval(interval);
   }, []);
 
-  const safeUpdateTeam = async (teamId, updates) => {
-    const filtered = {};
-    for (let key in updates) {
-      if (columnsCache.includes(key)) filtered[key] = updates[key];
+  // Fetch teams/users with 404 safety
+  const fetchTeams = async () => {
+    try {
+      const { data, error, status } = await supabase.from("teams").select("*");
+      if (error && status === 404) {
+        console.warn("Teams table not found. Returning empty array.");
+        setTeams([]);
+        setLoading(false);
+        return;
+      } else if (error) {
+        console.error("Error fetching teams:", error);
+        setLoading(false);
+        return;
+      }
+      setTeams(data || []);
+      setLoading(false);
+    } catch (err) {
+      console.error("Unexpected fetch error:", err);
+      setTeams([]);
+      setLoading(false);
     }
-    if (Object.keys(filtered).length === 0) return;
-    const { error } = await supabase.from("teams").update(filtered).eq("id", teamId);
-    if (error) console.error("Error updating team:", error);
-    else fetchTeams();
   };
 
-  const punchIn = (team) => {
-    safeUpdateTeam(team.id, {
-      punch_in: new Date().toISOString(),
-      break_type: null,
-      last_break_date: new Date().toISOString(),
-    });
-  };
+  // Punch In/Out
+  const handlePunch = async (teamId, action, breakType = null) => {
+    try {
+      const updateData = {};
+      if (action === "in") updateData.punch_in = new Date().toISOString();
+      else if (action === "out") {
+        updateData.punch_out = new Date().toISOString();
+        if (breakType) updateData.break_type = breakType;
+      }
 
-  const punchOut = (team) => {
-    const now = new Date();
-    let additionalSeconds = 0;
-    if (team.punch_in) {
-      additionalSeconds = Math.floor((new Date() - new Date(team.punch_in)) / 1000);
+      const { data, error, status } = await supabase
+        .from("teams")
+        .update(updateData)
+        .eq("id", teamId);
+
+      if (error && status === 404) {
+        console.warn("Teams table not found. Punch ignored.");
+        return;
+      } else if (error) {
+        console.error("Error punching in/out:", error);
+        return;
+      }
+
+      setTeams((prev) =>
+        prev.map((t) => (t.id === teamId ? { ...t, ...updateData } : t))
+      );
+    } catch (err) {
+      console.error("Unexpected error punching in/out:", err);
     }
-    safeUpdateTeam(team.id, {
-      punch_in: null,
-      daily_break_seconds: (team.daily_break_seconds || 0) + additionalSeconds,
-      last_break_date: now.toISOString(),
-    });
   };
 
+  // Add User
   const addUser = async (user) => {
-  try {
-    const { data, error, status } = await supabase
-      .from("teams")
-      .insert([user]);
-
-    if (error && status === 404) {
-      console.warn("Teams table not found. Cannot add user.");
-      return;
-    } else if (error) {
-      console.error("Error adding user:", error);
-      return;
+    try {
+      const { data, error, status } = await supabase.from("teams").insert([user]);
+      if (error && status === 404) {
+        console.warn("Teams table not found. Cannot add user.");
+        return;
+      } else if (error) {
+        console.error("Error adding user:", error);
+        return;
+      }
+      setTeams((prev) => [...prev, ...data]);
+    } catch (err) {
+      console.error("Unexpected error adding user:", err);
     }
+  };
 
-    setTeams((prev) => [...prev, ...data]);
-  } catch (err) {
-    console.error("Unexpected error adding user:", err);
-  }
-};
-
-
+  // Remove User
   const removeUser = async (teamId) => {
-  try {
-    const { data, error, status } = await supabase
-      .from("teams")
-      .delete()
-      .eq("id", teamId);
-
-    if (error && status === 404) {
-      console.warn("Teams table not found. Cannot remove user.");
-      return;
-    } else if (error) {
-      console.error("Error removing user:", error);
-      return;
+    try {
+      const { data, error, status } = await supabase.from("teams").delete().eq("id", teamId);
+      if (error && status === 404) {
+        console.warn("Teams table not found. Cannot remove user.");
+        return;
+      } else if (error) {
+        console.error("Error removing user:", error);
+        return;
+      }
+      setTeams((prev) => prev.filter((t) => t.id !== teamId));
+    } catch (err) {
+      console.error("Unexpected error removing user:", err);
     }
-
-    setTeams((prev) => prev.filter((t) => t.id !== teamId));
-  } catch (err) {
-    console.error("Unexpected error removing user:", err);
-  }
-};
-
-
-  const handleExport = () => {
-    let csv = "Name,Punch In,Total Break (s),Break Type\n";
-    teams.forEach((t) => {
-      csv += `${t.name || ""},${t.punch_in || ""},${t.daily_break_seconds || 0},${t.break_type || ""}\n`;
-    });
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `breaks_${exportRange}.csv`;
-    a.click();
   };
 
-  const loginAdmin = () => {
-    const username = prompt("Admin Username:");
-    const password = prompt("Admin Password:");
-    if (username === "admin" && password === "password") setAdminLogged(true);
-    else alert("Invalid credentials");
+  // Admin login handler (generic)
+  const handleAdminLogin = () => {
+    if (adminLogin.username === "admin" && adminLogin.password === "admin") {
+      setAdminLogged(true);
+    } else {
+      alert("Wrong credentials!");
+    }
   };
+
+  // Render loading
+  if (loading) return <div>Loading...</div>;
 
   return (
-    <div style={{ padding: 20, fontFamily: "Arial, sans-serif" }}>
-      <h1>⏱️ Break Tracker Dashboard</h1>
+    <div style={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
+      <h1 style={{ textAlign: "center" }}>Team Break Tracker</h1>
 
-      {/* Admin Button */}
-      <div style={{ marginBottom: 20 }}>
-        {adminLogged ? (
-          <button onClick={() => setAdminLogged(false)}>Logout Admin</button>
-        ) : (
-          <button onClick={loginAdmin}>Login Admin</button>
-        )}
-      </div>
-
-      {/* Admin Panel */}
-      {adminLogged && (
-        <div style={{ marginBottom: 20, border: "1px solid #ccc", padding: 10 }}>
-          <h3>👤 Admin Panel</h3>
-          <button onClick={addUser}>➕ Add User</button>
-          <button onClick={handleExport} style={{ marginLeft: 10 }}>
-            💾 Export CSV ({exportRange})
-          </button>
-          <select
-            value={exportRange}
-            onChange={(e) => setExportRange(e.target.value)}
-            style={{ marginLeft: 10 }}
-          >
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-            <option value="monthly">Monthly</option>
-          </select>
-        </div>
-      )}
-
-      {/* Users Table */}
-      <div style={{ overflowX: "auto" }}>
-        <table
-          style={{
-            borderCollapse: "collapse",
-            width: "100%",
-            minWidth: 600,
+      {/* Admin button */}
+      {!adminLogged && (
+        <button
+          style={{ position: "absolute", top: 20, right: 20 }}
+          onClick={() => {
+            const username = prompt("Admin Username");
+            const password = prompt("Admin Password");
+            setAdminLogin({ username, password });
+            handleAdminLogin();
           }}
         >
-          <thead style={{ position: "sticky", top: 0, backgroundColor: "#eee" }}>
-            <tr>
-              <th style={{ padding: 8, borderBottom: "1px solid #ccc" }}>Name</th>
-              <th style={{ padding: 8, borderBottom: "1px solid #ccc" }}>Punch In</th>
-              <th style={{ padding: 8, borderBottom: "1px solid #ccc" }}>Total Break ⏱️</th>
-              <th style={{ padding: 8, borderBottom: "1px solid #ccc" }}>Current Break Type</th>
-              {adminLogged && <th style={{ padding: 8, borderBottom: "1px solid #ccc" }}>Actions</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {teams.map((team, i) => {
-              const isLongBreak = (team.daily_break_seconds || 0) >= 3600;
-              const punchInTime = team.punch_in ? new Date(team.punch_in) : null;
-              const duration = punchInTime ? Math.floor((new Date() - punchInTime) / 1000) : 0;
+          🔑 Admin Login
+        </button>
+      )}
 
-              return (
-                <tr
-                  key={team.id}
-                  style={{
-                    backgroundColor: i % 2 === 0 ? "#fafafa" : "#fff",
-                    color: isLongBreak ? "red" : "black",
+      <table
+        style={{
+          width: "100%",
+          borderCollapse: "collapse",
+          marginTop: "40px",
+          tableLayout: "fixed",
+        }}
+      >
+        <thead style={{ position: "sticky", top: 0, background: "#f0f0f0" }}>
+          <tr>
+            <th>Name</th>
+            <th>Punch In</th>
+            <th>Punch Out</th>
+            <th>Break Type</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {teams.map((team, idx) => (
+            <tr
+              key={team.id}
+              style={{
+                background: idx % 2 === 0 ? "#fff" : "#f9f9f9",
+                textAlign: "center",
+              }}
+            >
+              <td>{team.name}</td>
+              <td>{team.punch_in ? new Date(team.punch_in).toLocaleTimeString() : "-"}</td>
+              <td>{team.punch_out ? new Date(team.punch_out).toLocaleTimeString() : "-"}</td>
+              <td>{team.break_type || "—"}</td>
+              <td>
+                <button onClick={() => handlePunch(team.id, "in")}>⏱️ Punch In</button>
+                <button
+                  onClick={() => {
+                    const type = prompt(
+                      "Enter break type: tea, lunch, dinner, bio"
+                    );
+                    handlePunch(team.id, "out", type);
                   }}
                 >
-                  <td style={{ padding: 8 }}>{team.name}</td>
-                  <td style={{ padding: 8 }}>
-                    {punchInTime ? punchInTime.toLocaleTimeString() : "—"}
-                  </td>
-                  <td style={{ padding: 8 }}>
-                    {(team.daily_break_seconds || 0) + duration}s
-                  </td>
-                  <td style={{ padding: 8 }}>
-                    {punchInTime ? (
-                      <select
-                        value={team.break_type || ""}
-                        onChange={(e) => safeUpdateTeam(team.id, { break_type: e.target.value })}
-                      >
-                        <option value="">—</option>
-                        {breakTypes.map((b) => (
-                          <option key={b.value} value={b.value}>
-                            {b.label}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      team.break_type || "—"
-                    )}
-                  </td>
-                  {adminLogged && (
-                    <td style={{ padding: 8 }}>
-                      <button onClick={() => punchIn(team)}>⏯️ Punch In</button>
-                      <button onClick={() => punchOut(team)} style={{ marginLeft: 5 }}>
-                        ⏹️ Punch Out
-                      </button>
-                      <button
-                        onClick={() => removeUser(team.id)}
-                        style={{ marginLeft: 5, color: "red" }}
-                      >
-                        🗑️ Remove
-                      </button>
-                    </td>
-                  )}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                  ⏹️ Punch Out
+                </button>
+                {adminLogged && (
+                  <button onClick={() => removeUser(team.id)}>🗑️ Remove</button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {/* Admin add user */}
+      {adminLogged && (
+        <div style={{ marginTop: "20px" }}>
+          <button
+            onClick={() => {
+              const name = prompt("Enter user name");
+              if (name) addUser({ name });
+            }}
+          >
+            ➕ Add User
+          </button>
+        </div>
+      )}
     </div>
   );
 }

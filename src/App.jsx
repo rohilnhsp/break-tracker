@@ -1,170 +1,125 @@
-import React, { useState, useEffect } from 'react';
-import { supabase } from './supabaseClient';
-import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc';
-import timezone from 'dayjs/plugin/timezone';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import React, { useEffect, useState } from "react";
+import { supabase } from "./supabaseClient"; // Make sure this points to your client file
+import dayjs from "dayjs";
 
-dayjs.extend(utc);
-dayjs.extend(timezone);
-
-function Dashboard() {
-  const [members, setMembers] = useState([]);
+export default function App() {
+  const [teamData, setTeamData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  const fetchMembers = async () => {
-    const { data, error } = await supabase
-      .from('team_members')
-      .select('id, name, email, is_admin, attendance:punch_in,attendance:punch_out')
-      .order('name');
+  // Fetch teams from Supabase
+  const fetchTeams = async () => {
+    setLoading(true);
+    const { data, error } = await supabase.from("teams").select("*");
 
     if (error) {
-      console.error(error);
+      setError(error.message);
     } else {
-      const membersData = data.map(member => {
-        const punchIn = member.attendance?.punch_in;
-        const punchOut = member.attendance?.punch_out;
-        const onBreak = punchIn && !punchOut;
-        const breakDuration = onBreak
-          ? dayjs().tz('Europe/London').diff(dayjs(punchIn).tz('Europe/London'), 'minute')
-          : punchIn && punchOut
-          ? dayjs(punchOut).tz('Europe/London').diff(dayjs(punchIn).tz('Europe/London'), 'minute')
-          : 0;
-        return { ...member, onBreak, breakDuration };
-      });
-      setMembers(membersData);
+      setTeamData(data);
     }
     setLoading(false);
   };
 
   useEffect(() => {
-    fetchMembers();
-    const interval = setInterval(fetchMembers, 60000); // refresh every minute
-    return () => clearInterval(interval);
+    fetchTeams();
   }, []);
 
-  const handlePunch = async (email) => {
-    try {
-      await supabase.rpc('punch_action', { member_email: email });
-      setMembers(prev =>
-        prev.map(m => m.email === email ? { ...m, onBreak: !m.onBreak, breakDuration: 0 } : m)
-      );
-    } catch (err) {
-      console.error('Error punching:', err.message);
+  // Handle punch in / punch out
+  const handlePunch = async (id, isOnBreak) => {
+    const now = dayjs().format("YYYY-MM-DD HH:mm:ss");
+    let updates = {};
+
+    if (!isOnBreak) {
+      // Punch In
+      updates = { on_break: true, break_start: now };
+    } else {
+      // Punch Out
+      const member = teamData.find((m) => m.id === id);
+      const start = member.break_start;
+      const duration = start ? dayjs(now).diff(dayjs(start), "minute") : 0;
+      updates = {
+        on_break: false,
+        break_start: null,
+        break_duration: (member.break_duration || 0) + duration,
+      };
+    }
+
+    const { error } = await supabase.from("teams").update(updates).eq("id", id);
+    if (error) {
+      alert("Error updating break: " + error.message);
+    } else {
+      fetchTeams(); // Refresh table
     }
   };
 
-  const exportData = () => {
-    if (!members.length) return alert('No data to export');
-    const rows = members.map(m => ({
-      Name: m.name,
-      Email: m.email,
-      'On Break': m.onBreak ? 'Yes' : 'No',
-      'Break Duration (mins)': m.breakDuration
-    }));
-    const csvContent =
-      'data:text/csv;charset=utf-8,' +
-      [Object.keys(rows[0]).join(','), ...rows.map(r => Object.values(r).join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', 'break_data.csv');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  if (loading) return <div>Loading...</div>;
+  if (loading) return <p className="p-4">Loading team data...</p>;
+  if (error) return <p className="p-4 text-red-600">Error: {error}</p>;
 
   return (
-    <div className="container">
-      <h1>Team Break Dashboard</h1>
-      <button onClick={exportData}>Export Data</button>
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Email</th>
-            <th>On Break</th>
-            <th>Break Duration (mins)</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {members.map(member => (
-            <tr key={member.id}>
-              <td>{member.name}</td>
-              <td>{member.email}</td>
-              <td>{member.onBreak ? 'Yes' : 'No'}</td>
-              <td>{member.breakDuration}</td>
-              <td>
-                <button onClick={() => handlePunch(member.email)}>
-                  {member.onBreak ? 'Punch Out' : 'Punch In'}
-                </button>
-              </td>
+    <div className="p-6 max-w-5xl mx-auto font-sans">
+      <h1 className="text-3xl font-bold mb-4">Team Break Dashboard</h1>
+      <button
+        onClick={() => exportData(teamData)}
+        className="mb-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+      >
+        Export Data
+      </button>
+      <div className="overflow-x-auto">
+        <table className="min-w-full border border-gray-200 rounded shadow-sm">
+          <thead className="bg-gray-100">
+            <tr>
+              <th className="py-2 px-4 border-b">Name</th>
+              <th className="py-2 px-4 border-b">Email</th>
+              <th className="py-2 px-4 border-b">On Break</th>
+              <th className="py-2 px-4 border-b">Break Duration (mins)</th>
+              <th className="py-2 px-4 border-b">Action</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function Admin() {
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [members, setMembers] = useState([]);
-
-  const fetchMembers = async () => {
-    const { data } = await supabase.from('team_members').select('*');
-    setMembers(data || []);
-  };
-
-  useEffect(() => { fetchMembers(); }, []);
-
-  const addMember = async () => {
-    try {
-      await supabase.from('team_members').insert([{ name, email, is_admin: false }]);
-      setName(''); setEmail('');
-      fetchMembers();
-    } catch (err) { console.error(err); }
-  };
-
-  const removeMember = async (id) => {
-    try {
-      await supabase.from('team_members').delete().eq('id', id);
-      fetchMembers();
-    } catch (err) { console.error(err); }
-  };
-
-  return (
-    <div className="container">
-      <h1>Admin Panel</h1>
-      <div>
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" />
-        <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" />
-        <button onClick={addMember}>Add Member</button>
+          </thead>
+          <tbody>
+            {teamData.map((member, index) => (
+              <tr
+                key={member.id}
+                className={index % 2 === 0 ? "bg-white" : "bg-gray-50"}
+              >
+                <td className="py-2 px-4 border-b">{member.name}</td>
+                <td className="py-2 px-4 border-b">{member.email}</td>
+                <td className="py-2 px-4 border-b">
+                  {member.on_break ? "Yes" : "No"}
+                </td>
+                <td className="py-2 px-4 border-b">
+                  {member.break_duration || 0}
+                </td>
+                <td className="py-2 px-4 border-b">
+                  <button
+                    onClick={() => handlePunch(member.id, member.on_break)}
+                    className={`px-3 py-1 rounded text-white ${
+                      member.on_break ? "bg-red-500 hover:bg-red-600" : "bg-green-500 hover:bg-green-600"
+                    }`}
+                  >
+                    {member.on_break ? "Punch Out" : "Punch In"}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-      <h2>Team Members</h2>
-      <ul>
-        {members.map(m => (
-          <li key={m.id}>
-            {m.name} ({m.email}) <button onClick={() => removeMember(m.id)}>Remove</button>
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }
 
-export default function App() {
-  return (
-    <Router>
-      <Routes>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/admin" element={<Admin />} />
-        <Route path="*" element={<Navigate to="/" />} />
-      </Routes>
-    </Router>
-  );
+// Optional: Export team data to CSV
+function exportData(data) {
+  const csvContent =
+    "data:text/csv;charset=utf-8," +
+    ["Name,Email,On Break,Break Duration"]
+      .concat(data.map((m) => `${m.name},${m.email},${m.on_break},${m.break_duration || 0}`))
+      .join("\n");
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement("a");
+  link.setAttribute("href", encodedUri);
+  link.setAttribute("download", "team_break_data.csv");
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }

@@ -4,7 +4,8 @@ import { createClient } from "@supabase/supabase-js";
 
 // ---- Supabase Client ----
 const supabaseUrl = "https://ulgagdsllwkqxluakifk.supabase.co";
-const anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk";
+const anonKey =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk";
 
 const supabase = createClient(supabaseUrl, anonKey);
 
@@ -20,20 +21,21 @@ export default function App() {
 
   // ---- Auth Session ----
   useEffect(() => {
-    const getSession = async () => {
+    const initSession = async () => {
       const { data } = await supabase.auth.getSession();
       setSession(data.session);
       setUser(data.session?.user || null);
-      setIsAdmin(data.session?.user?.email === "admin@example.com"); // generic admin email
+      setIsAdmin(data.session?.user?.email === "admin@example.com"); // generic admin
     };
-    getSession();
+    initSession();
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
-      setUser(newSession?.user || null);
-      setIsAdmin(newSession?.user?.email === "admin@example.com");
-    });
-
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, newSession) => {
+        setSession(newSession);
+        setUser(newSession?.user || null);
+        setIsAdmin(newSession?.user?.email === "admin@example.com");
+      }
+    );
     return () => listener.subscription.unsubscribe();
   }, []);
 
@@ -50,6 +52,7 @@ export default function App() {
   // ---- Fetch Teams ----
   useEffect(() => {
     if (!session) return;
+
     const fetchTeams = async () => {
       const { data, error } = await supabase
         .from("teams")
@@ -61,7 +64,6 @@ export default function App() {
     };
     fetchTeams();
 
-    // Realtime subscription
     const subscription = supabase
       .channel("public:teams")
       .on(
@@ -82,9 +84,7 @@ export default function App() {
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(subscription);
-    };
+    return () => supabase.removeChannel(subscription);
   }, [session]);
 
   // ---- Punch In / Punch Out ----
@@ -230,8 +230,12 @@ export default function App() {
           <tbody>
             {teams.map((team) => {
               const onBreak = !!team.break_start && !team.break_end;
-              const duration = formatDuration(team.break_start, onBreak ? new Date() : team.break_end);
-              const highlight = onBreak && new Date() - new Date(team.break_start) > 15 * 60 * 1000; // 15 mins
+              const duration = formatDuration(
+                team.break_start,
+                onBreak ? new Date() : team.break_end
+              );
+              const highlight =
+                onBreak && new Date() - new Date(team.break_start) > 15 * 60 * 1000; // 15 mins
               return (
                 <tr key={team.id} className="border-b">
                   <td className="p-2">{team.name}</td>
@@ -242,7 +246,11 @@ export default function App() {
                       <span className="bg-green-300 px-2 py-1 rounded">No</span>
                     )}
                   </td>
-                  <td className={`p-2 ${highlight ? "bg-red-200 font-bold" : ""}`}>
+                  <td
+                    className={`p-2 ${
+                      highlight ? "bg-red-200 font-bold" : ""
+                    }`}
+                  >
                     {duration}
                   </td>
                   <td className="p-2">

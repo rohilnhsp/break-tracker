@@ -1,260 +1,284 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = "https://ulgagdsllwkqxluakifk.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk";
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// ---- Supabase Clients ----
+const supabaseUrl = "https://ulgagdsllwkqxluakifk.supabase.co";
+const anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk";
+const serviceKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MDE2MjM3OCwiZXhwIjoyMDc1NzM4Mzc4fQ.Wu8NyTeIU5rB_evLHfg2RSTqt9UKjEQEIF-RCfbOvQM";
 
-// Admin secret for generic login
-const ADMIN_SECRET = "supersecret"; // Change to your chosen password
+// public user client
+const supabase = createClient(supabaseUrl, anonKey);
 
-export default function App() {
+// secure admin client (server-side power)
+const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+
+const App = () => {
   const [user, setUser] = useState(null);
-  const [teams, setTeams] = useState([]);
+  const [team, setTeam] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [adminMode, setAdminMode] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserRole, setNewUserRole] = useState("user");
+  const [error, setError] = useState("");
 
-  const [newUser, setNewUser] = useState({ name: "", email: "", role: "user" });
+  // ---- Admin password (you can customize this easily) ----
+  const ADMIN_SECRET = "nhsp-admin-2025"; // simple generic admin login
 
-  // Ref to store timers
-  const timersRef = useRef({});
-
-  // Fetch current user from Supabase
-  useEffect(() => {
-    const fetchUser = async () => {
-      const { data: u, error } = await supabase.auth.getUser();
-      if (error) {
-        console.error(error);
-        setUser(null);
-      } else {
-        setUser(u.user);
-      }
-      setLoading(false);
-    };
-    fetchUser();
-  }, []);
-
-  // Fetch teams from Supabase
-  const fetchTeams = async () => {
-    const { data, error } = await supabase.from("teams").select("*");
+  // ---- Load team members ----
+  const fetchTeam = async () => {
+    const { data, error } = await supabase.from("team").select("*");
     if (error) console.error(error);
-    else setTeams(data || []);
+    else setTeam(data || []);
   };
 
-  // Handle Punch In / Out
-  const handlePunch = async (team) => {
-    try {
-      const now = new Date().toISOString();
-      const updateData =
-        team.break_start && !team.break_end
-          ? { break_end: now } // Punch Out
-          : { break_start: now, break_end: null }; // Punch In
-
-      await supabase
-        .from("teams")
-        .update(updateData)
-        .eq("id", team.id);
-
-      // Immediately update local state
-      setTeams((prev) =>
-        prev.map((t) =>
-          t.id === team.id
-            ? { ...t, ...updateData }
-            : t
-        )
-      );
-    } catch (error) {
-      console.error("Error updating break:", error);
-      alert("Error updating break");
-    }
+  // ---- Handle Punch In ----
+  const handlePunchIn = async (id) => {
+    const { error } = await supabase
+      .from("team")
+      .update({ status: "Working", break_start: null, break_end: null })
+      .eq("id", id);
+    if (error) console.error(error);
+    fetchTeam();
   };
 
-  // Live timers
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTeams((prev) =>
-        prev.map((t) => {
-          if (t.break_start && !t.break_end) {
-            return { ...t, duration: new Date() - new Date(t.break_start) };
-          }
-          return { ...t, duration: t.break_end && t.break_start ? new Date(t.break_end) - new Date(t.break_start) : 0 };
-        })
-      );
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Convert milliseconds to HH:MM:SS
-  const formatDuration = (ms) => {
-    if (!ms) return "00:00:00";
-    const totalSeconds = Math.floor(ms / 1000);
-    const h = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
-    const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
-    const s = String(totalSeconds % 60).padStart(2, "0");
-    return `${h}:${m}:${s}`;
+  // ---- Handle Punch Out ----
+  const handlePunchOut = async (id) => {
+    const now = new Date().toISOString();
+    const { data, error } = await supabase
+      .from("team")
+      .update({ status: "On Break", break_start: now })
+      .eq("id", id);
+    if (error) console.error(error);
+    fetchTeam();
   };
 
-  // Handle Admin Login
-  const handleAdminLogin = () => {
-    if (adminPassword === ADMIN_SECRET) {
-      setAdminMode(true);
-      setAdminPassword("");
-    } else {
-      alert("Wrong password!");
-    }
-  };
-
-  // Add user
+  // ---- Add User ----
   const handleAddUser = async () => {
-    if (!newUser.name || !newUser.email) return alert("Enter name & email");
-    const { data, error } = await supabase.from("teams").insert([newUser]);
+    if (!newUserName.trim()) {
+      setError("Enter a name first!");
+      return;
+    }
+
+    const { error } = await supabaseAdmin
+      .from("team")
+      .insert([{ name: newUserName.trim(), role: newUserRole, status: "Available" }]);
+
     if (error) {
       console.error(error);
-      alert("Error adding user");
+      setError("Error adding user");
     } else {
-      setTeams((prev) => [...prev, data[0]]);
-      setNewUser({ name: "", email: "", role: "user" });
+      setError("");
+      setNewUserName("");
+      fetchTeam();
     }
   };
 
-  // Export CSV
-  const handleExport = (range = "day") => {
-    let filtered = [...teams];
+  // ---- Export to CSV ----
+  const handleExport = (range = "all") => {
+    if (!team.length) return alert("No data to export");
     const now = new Date();
+    let filtered = team;
+
     if (range === "day") {
-      filtered = filtered.filter((t) => new Date(t.break_start) >= new Date(now.setHours(0, 0, 0, 0)));
+      const today = now.toISOString().split("T")[0];
+      filtered = team.filter(
+        (m) => (m.break_start || "").startsWith(today) || (m.break_end || "").startsWith(today)
+      );
     } else if (range === "week") {
       const weekAgo = new Date();
       weekAgo.setDate(now.getDate() - 7);
-      filtered = filtered.filter((t) => new Date(t.break_start) >= weekAgo);
+      filtered = team.filter(
+        (m) => new Date(m.break_start || now) >= weekAgo || new Date(m.break_end || now) >= weekAgo
+      );
     } else if (range === "month") {
       const monthAgo = new Date();
-      monthAgo.setMonth(now.getMonth() - 1);
-      filtered = filtered.filter((t) => new Date(t.break_start) >= monthAgo);
+      monthAgo.setDate(now.getDate() - 30);
+      filtered = team.filter(
+        (m) => new Date(m.break_start || now) >= monthAgo || new Date(m.break_end || now) >= monthAgo
+      );
     }
 
-    const headers = ["Name", "Email", "Break Start", "Break End", "Duration"];
-    const rows = filtered.map((t) => [
-      t.name,
-      t.email,
-      t.break_start,
-      t.break_end,
-      formatDuration(t.duration),
-    ]);
-    const csvContent =
-      "data:text/csv;charset=utf-8," +
-      [headers, ...rows].map((e) => e.join(",")).join("\n");
-    const encodedUri = encodeURI(csvContent);
+    const csv =
+      "Name,Role,Status,Break Start,Break End\n" +
+      filtered
+        .map(
+          (m) =>
+            `${m.name},${m.role},${m.status || ""},${m.break_start || ""},${m.break_end || ""}`
+        )
+        .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv" });
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "break_data.csv");
-    document.body.appendChild(link);
+    link.href = URL.createObjectURL(blob);
+    link.download = `break_data_${range}_${now.toISOString().split("T")[0]}.csv`;
     link.click();
-    document.body.removeChild(link);
   };
 
-  if (loading) return <div>Loading user...</div>;
+  // ---- Timer for "On Break" highlight ----
+  useEffect(() => {
+    const interval = setInterval(fetchTeam, 30000); // refresh every 30s
+    fetchTeam();
+    return () => clearInterval(interval);
+  }, []);
 
-  return (
-    <div className="p-4">
-      {!adminMode && (
-        <div className="p-4 border rounded bg-gray-100 mb-4">
-          <h2 className="font-bold mb-2">Admin Login</h2>
+  useEffect(() => {
+    const timer = setInterval(() => setTeam((t) => [...t]), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => setLoading(false), []);
+
+  // ---- UI: Login as Admin ----
+  if (!user && !isAdmin && !loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-900 text-white">
+        <div className="bg-gray-800 p-6 rounded-2xl shadow-lg w-80">
+          <h1 className="text-xl font-semibold text-center mb-4">Admin / User Access</h1>
           <input
             type="password"
             placeholder="Enter admin password"
-            className="border px-2 py-1 mr-2"
+            className="w-full mb-3 p-2 rounded bg-gray-700 text-white"
             value={adminPassword}
             onChange={(e) => setAdminPassword(e.target.value)}
           />
           <button
-            className="bg-blue-500 text-white px-3 py-1 rounded"
-            onClick={handleAdminLogin}
+            className="w-full bg-blue-600 py-2 rounded hover:bg-blue-700"
+            onClick={() => {
+              if (adminPassword === ADMIN_SECRET) setIsAdmin(true);
+              else alert("Incorrect password — showing user dashboard instead.");
+              setUser({ name: "Generic User" });
+            }}
           >
-            Login
+            Continue
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ---- Helper for long breaks ----
+  const isLongBreak = (member) => {
+    if (member.status !== "On Break" || !member.break_start) return false;
+    const diff = (Date.now() - new Date(member.break_start)) / 60000; // mins
+    return diff > 30;
+  };
+
+  // ---- Dashboard ----
+  return (
+    <div className="min-h-screen bg-gray-900 text-white p-4">
+      <h1 className="text-2xl font-bold mb-4 text-center">
+        {isAdmin ? "Admin Dashboard" : "User Dashboard"}
+      </h1>
+
+      {isAdmin && (
+        <div className="bg-gray-800 p-4 rounded-xl mb-6">
+          <h2 className="text-lg font-semibold mb-2">Add New User</h2>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              className="flex-1 p-2 rounded bg-gray-700"
+              placeholder="User name"
+              value={newUserName}
+              onChange={(e) => setNewUserName(e.target.value)}
+            />
+            <select
+              className="p-2 rounded bg-gray-700"
+              value={newUserRole}
+              onChange={(e) => setNewUserRole(e.target.value)}
+            >
+              <option value="user">User</option>
+              <option value="manager">Manager</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button
+              onClick={handleAddUser}
+              className="bg-green-600 px-4 py-2 rounded hover:bg-green-700"
+            >
+              Add
+            </button>
+          </div>
+          {error && <p className="text-red-400 mt-2">{error}</p>}
+        </div>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full border border-gray-700 rounded-xl">
+          <thead className="bg-gray-800">
+            <tr>
+              <th className="p-2">Name</th>
+              <th className="p-2">Role</th>
+              <th className="p-2">Status</th>
+              <th className="p-2">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {team.map((member) => (
+              <tr
+                key={member.id}
+                className={`text-center ${
+                  isLongBreak(member)
+                    ? "bg-red-800"
+                    : member.status === "On Break"
+                    ? "bg-yellow-700"
+                    : "bg-gray-700"
+                }`}
+              >
+                <td className="p-2">{member.name}</td>
+                <td className="p-2 capitalize">{member.role}</td>
+                <td className="p-2">{member.status}</td>
+                <td className="p-2">
+                  {member.status === "On Break" ? (
+                    <button
+                      onClick={() => handlePunchIn(member.id)}
+                      className="bg-blue-600 px-3 py-1 rounded hover:bg-blue-700"
+                    >
+                      Punch In
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handlePunchOut(member.id)}
+                      className="bg-yellow-600 px-3 py-1 rounded hover:bg-yellow-700"
+                    >
+                      Punch Out
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {isAdmin && (
+        <div className="flex flex-wrap gap-3 justify-center mt-6">
+          <button
+            onClick={() => handleExport("day")}
+            className="bg-purple-600 px-4 py-2 rounded hover:bg-purple-700"
+          >
+            Export Day
+          </button>
+          <button
+            onClick={() => handleExport("week")}
+            className="bg-purple-600 px-4 py-2 rounded hover:bg-purple-700"
+          >
+            Export Week
+          </button>
+          <button
+            onClick={() => handleExport("month")}
+            className="bg-purple-600 px-4 py-2 rounded hover:bg-purple-700"
+          >
+            Export Month
+          </button>
+          <button
+            onClick={() => handleExport("all")}
+            className="bg-purple-600 px-4 py-2 rounded hover:bg-purple-700"
+          >
+            Export All
           </button>
         </div>
       )}
-
-      {adminMode && (
-        <div className="mb-4">
-          <h2 className="font-bold mb-2">Admin Actions</h2>
-          <div className="mb-2">
-            <button className="bg-green-500 text-white px-3 py-1 rounded mr-2" onClick={() => handleExport("day")}>Export Day</button>
-            <button className="bg-green-500 text-white px-3 py-1 rounded mr-2" onClick={() => handleExport("week")}>Export Week</button>
-            <button className="bg-green-500 text-white px-3 py-1 rounded mr-2" onClick={() => handleExport("month")}>Export Month</button>
-          </div>
-          <div className="mb-2 flex items-center gap-2">
-            <input
-              type="text"
-              placeholder="Name"
-              className="border px-2 py-1"
-              value={newUser.name}
-              onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
-            />
-            <input
-              type="email"
-              placeholder="Email"
-              className="border px-2 py-1"
-              value={newUser.email}
-              onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
-            />
-            <select
-              className="border px-2 py-1"
-              value={newUser.role}
-              onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
-            >
-              <option value="user">User</option>
-              <option value="admin">Admin</option>
-              <option value="manager">Manager</option>
-            </select>
-            <button
-              className="bg-blue-500 text-white px-3 py-1 rounded"
-              onClick={handleAddUser}
-            >
-              Add User
-            </button>
-          </div>
-        </div>
-      )}
-
-      <h2 className="font-bold mb-2">Team Break Dashboard</h2>
-      <table className="table-auto border-collapse border border-gray-300 w-full">
-        <thead>
-          <tr className="bg-gray-200">
-            <th className="border px-2 py-1">Name</th>
-            <th className="border px-2 py-1">Email</th>
-            <th className="border px-2 py-1">On Break</th>
-            <th className="border px-2 py-1">Break Duration</th>
-            <th className="border px-2 py-1">Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {teams.map((team) => {
-            const onBreak = team.break_start && !team.break_end;
-            const longBreak = onBreak && team.duration > 15 * 60 * 1000; // >15 mins
-            return (
-              <tr key={team.id} className={longBreak ? "bg-red-100" : ""}>
-                <td className="border px-2 py-1">{team.name}</td>
-                <td className="border px-2 py-1">{team.email}</td>
-                <td className="border px-2 py-1">{onBreak ? "Yes" : "No"}</td>
-                <td className="border px-2 py-1">{formatDuration(team.duration)}</td>
-                <td className="border px-2 py-1">
-                  <button
-                    className={`px-2 py-1 rounded ${
-                      onBreak ? "bg-red-500 text-white" : "bg-green-500 text-white"
-                    }`}
-                    onClick={() => handlePunch(team)}
-                  >
-                    {onBreak ? "Punch Out" : "Punch In"}
-                  </button>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
     </div>
   );
-}
+};
+
+export default App;

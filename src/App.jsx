@@ -1,144 +1,169 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 import dayjs from "dayjs";
+import duration from "dayjs/plugin/duration";
+import relativeTime from "dayjs/plugin/relativeTime";
+import { saveAs } from "file-saver";
+
+dayjs.extend(duration);
+dayjs.extend(relativeTime);
 
 const supabaseUrl = "https://ulgagdsllwkqxluakifk.supabase.co";
 const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk";
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const LONG_BREAK_MINUTES = 15; // Highlight breaks longer than this
-
 export default function App() {
   const [teams, setTeams] = useState([]);
-  const [currentUser, setCurrentUser] = useState(null);
-  const [exportRange, setExportRange] = useState("day"); // day, week, month
+  const [loading, setLoading] = useState(true);
 
-  // Load current user
+  // fallback user for testing or until auth is set up
+  const [currentUser, setCurrentUser] = useState({ role: "admin" });
+
+  const timersRef = useRef({}); // keep interval refs per user
+
   useEffect(() => {
-    const getUser = async () => {
-      const { data } = await supabase.auth.getUser();
-      setCurrentUser(data.user || null);
+    // Fetch initial teams
+    const fetchTeams = async () => {
+      const { data, error } = await supabase.from("teams").select("*");
+      if (error) {
+        console.error("Error fetching teams:", error);
+      } else {
+        setTeams(data);
+      }
+      setLoading(false);
     };
-    getUser();
-  }, []);
 
-  // Load teams and subscribe to real-time updates
-  useEffect(() => {
     fetchTeams();
 
+    // Subscribe to realtime updates
     const subscription = supabase
       .channel("public:teams")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "teams" },
         (payload) => {
-          fetchTeams();
+          console.log("Realtime update:", payload);
+          setTeams((prev) => {
+            const updated = [...prev];
+            const idx = updated.findIndex((t) => t.id === payload.new.id);
+            if (idx >= 0) {
+              updated[idx] = payload.new;
+            } else {
+              updated.push(payload.new);
+            }
+            return updated;
+          });
         }
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(subscription);
-    };
+    return () => supabase.removeChannel(subscription);
   }, []);
 
-  const fetchTeams = async () => {
-    const { data, error } = await supabase.from("teams").select("*");
-    if (!error) setTeams(data);
+  const punchIn = async (team) => {
+    const now = new Date().toISOString();
+    try {
+      const { data, error } = await supabase
+        .from("teams")
+        .update({ break_start: now, break_end: null })
+        .eq("id", team.id)
+        .select()
+        .single();
+      if (error) throw error;
+      console.log("Punch In updated:", data);
+    } catch (err) {
+      console.error("Error updating break:", err);
+    }
   };
 
-  const updateBreak = async (teamId, onBreak) => {
+  const punchOut = async (team) => {
+    const now = new Date().toISOString();
     try {
-      const updateData = onBreak
-        ? { break_start: new Date().toISOString(), break_end: null }
-        : { break_end: new Date().toISOString() };
-
-      console.log("Updating team:", teamId, updateData);
-
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("teams")
-        .update(updateData)
-        .eq("id", teamId);
-
-      if (error) console.error("Error updating break:", error);
-      else fetchTeams();
+        .update({ break_end: now })
+        .eq("id", team.id)
+        .select()
+        .single();
+      if (error) throw error;
+      console.log("Punch Out updated:", data);
     } catch (err) {
-      console.error("Unexpected error updating break:", err);
+      console.error("Error updating break:", err);
     }
   };
 
   const formatDuration = (start, end) => {
-    if (!start) return "00:00:00";
-    const diff = dayjs(end || new Date()).diff(dayjs(start));
-    const duration = dayjs.duration(diff);
-    return [
-      String(duration.hours()).padStart(2, "0"),
-      String(duration.minutes()).padStart(2, "0"),
-      String(duration.seconds()).padStart(2, "0"),
-    ].join(":");
+    if (!start) return "--:--:--";
+    const endTime = end ? dayjs(end) : dayjs();
+    const diff = dayjs.duration(endTime.diff(dayjs(start)));
+    return `${String(diff.hours()).padStart(2, "0")}:${String(
+      diff.minutes()
+    ).padStart(2, "0")}:${String(diff.seconds()).padStart(2, "0")}`;
   };
 
-  const exportData = () => {
-    // Simple CSV export
-    const rows = teams.map((t) => [
-      t.name,
-      t.email,
-      t.break_start,
-      t.break_end,
-      t.break_start
-        ? formatDuration(t.break_start, t.break_end || new Date())
-        : "00:00:00",
-    ]);
-    const csvContent =
-      "data:text/csv;charset=utf-8," +
-      [["Name", "Email", "Break Start", "Break End", "Break Duration"].join(",")]
-        .concat(rows.map((r) => r.join(",")))
-        .join("\n");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `break_data_${exportRange}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const handleExport = (type) => {
+    if (!["day", "week", "month"].includes(type)) return;
+    // filter data for export
+    const now = dayjs();
+    const filtered = teams.filter((t) => {
+      const start = t.break_start ? dayjs(t.break_start) : null;
+      if (!start) return false;
+      if (type === "day") return start.isSame(now, "day");
+      if (type === "week") return start.isSame(now, "week");
+      if (type === "month") return start.isSame(now, "month");
+      return true;
+    });
+
+    const csv = [
+      ["Name", "Email", "Break Start", "Break End", "Duration"].join(","),
+      ...filtered.map((t) =>
+        [
+          t.name,
+          t.email,
+          t.break_start || "",
+          t.break_end || "",
+          formatDuration(t.break_start, t.break_end),
+        ].join(",")
+      ),
+    ].join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    saveAs(blob, `breaks-${type}.csv`);
   };
 
-  // Force re-render every second for live timers
-  useEffect(() => {
-    const interval = setInterval(() => setTeams((prev) => [...prev]), 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  if (!currentUser) return <div className="p-4">Loading user...</div>;
+  if (loading) return <div className="p-4">Loading teams...</div>;
 
   return (
-    <div className="p-4 font-sans">
+    <div className="p-4">
       <h1 className="text-2xl font-bold mb-4">Team Break Dashboard</h1>
 
-      {(currentUser?.role === "manager" || currentUser?.role === "admin") && (
-        <div className="mb-4 flex items-center space-x-4">
-          <select
-            className="border rounded px-2 py-1"
-            value={exportRange}
-            onChange={(e) => setExportRange(e.target.value)}
-          >
-            <option value="day">Today</option>
-            <option value="week">This Week</option>
-            <option value="month">This Month</option>
-          </select>
+      {currentUser.role === "admin" && (
+        <div className="mb-4 flex gap-2">
           <button
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-            onClick={exportData}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            onClick={() => handleExport("day")}
           >
-            Export Data
+            Export Day
+          </button>
+          <button
+            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+            onClick={() => handleExport("week")}
+          >
+            Export Week
+          </button>
+          <button
+            className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700"
+            onClick={() => handleExport("month")}
+          >
+            Export Month
           </button>
         </div>
       )}
 
-      <table className="min-w-full border">
+      <table className="min-w-full bg-white border">
         <thead>
-          <tr className="bg-gray-200">
+          <tr>
             <th className="border px-2 py-1">Name</th>
             <th className="border px-2 py-1">Email</th>
             <th className="border px-2 py-1">On Break</th>
@@ -148,37 +173,40 @@ export default function App() {
         </thead>
         <tbody>
           {teams.map((team) => {
-            const onBreak = !!team.break_start && !team.break_end;
-            const duration = formatDuration(team.break_start, team.break_end || new Date());
-            const durationMinutes = team.break_start
-              ? dayjs().diff(dayjs(team.break_start), "minute")
-              : 0;
-            const highlight = onBreak && durationMinutes >= LONG_BREAK_MINUTES;
-
+            const onBreak = team.break_start && !team.break_end;
+            const durationStr = formatDuration(team.break_start, team.break_end);
+            const highlightLongBreak = onBreak && dayjs().diff(dayjs(team.break_start), "minute") >= 5; // change X mins here
             return (
               <tr
                 key={team.id}
-                className={highlight ? "bg-red-100" : ""}
+                className={highlightLongBreak ? "bg-red-100" : ""}
               >
                 <td className="border px-2 py-1">{team.name}</td>
                 <td className="border px-2 py-1">{team.email}</td>
                 <td className="border px-2 py-1">
                   {onBreak ? (
-                    <span className="bg-yellow-300 px-2 py-1 rounded">Yes</span>
+                    <span className="px-2 py-1 bg-yellow-200 rounded">Yes</span>
                   ) : (
-                    <span className="bg-green-300 px-2 py-1 rounded">No</span>
+                    <span className="px-2 py-1 bg-green-200 rounded">No</span>
                   )}
                 </td>
-                <td className="border px-2 py-1 font-mono">{duration}</td>
-                <td className="border px-2 py-1">
-                  <button
-                    className={`px-2 py-1 rounded ${
-                      onBreak ? "bg-red-500 text-white" : "bg-green-500 text-white"
-                    }`}
-                    onClick={() => updateBreak(team.id, !onBreak)}
-                  >
-                    {onBreak ? "Punch Out" : "Punch In"}
-                  </button>
+                <td className="border px-2 py-1">{durationStr}</td>
+                <td className="border px-2 py-1 flex gap-1">
+                  {!onBreak ? (
+                    <button
+                      className="px-2 py-1 bg-blue-500 text-white rounded"
+                      onClick={() => punchIn(team)}
+                    >
+                      Punch In
+                    </button>
+                  ) : (
+                    <button
+                      className="px-2 py-1 bg-red-500 text-white rounded"
+                      onClick={() => punchOut(team)}
+                    >
+                      Punch Out
+                    </button>
+                  )}
                 </td>
               </tr>
             );

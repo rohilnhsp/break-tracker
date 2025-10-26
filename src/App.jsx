@@ -13,7 +13,7 @@ const App = () => {
   const [adminModal, setAdminModal] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
-  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserName, setNewUserName] = useState("");
 
   const LONG_BREAK_MIN = 10; // Highlight if break exceeds this
 
@@ -25,19 +25,14 @@ const App = () => {
 
   useEffect(() => {
     fetchTeams();
-
-    // Realtime subscription for updates
     const subscription = supabase
       .channel("public:teams")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "teams" },
-        () => {
-          fetchTeams();
-        }
+        () => fetchTeams()
       )
       .subscribe();
-
     return () => supabase.removeChannel(subscription);
   }, []);
 
@@ -48,13 +43,9 @@ const App = () => {
       team.break_end === null
         ? { break_end: now } // Punch Out
         : { break_start: now, break_end: null }; // Punch In
-
     const { error } = await supabase.from("teams").update(updates).eq("id", team.id);
-    if (error) {
-      console.error("Error updating break:", error);
-    } else {
-      fetchTeams();
-    }
+    if (error) console.error("Error updating break:", error);
+    else fetchTeams();
   };
 
   // Admin login
@@ -69,31 +60,35 @@ const App = () => {
 
   // Add new user
   const handleAddUser = async () => {
-    if (!newUserEmail) return;
+    if (!newUserName) return;
     const { error } = await supabase.from("teams").insert([
-      {
-        name: newUserEmail,
-        break_start: null,
-        break_end: null,
-      },
+      { name: newUserName, break_start: null, break_end: null },
     ]);
-    if (error) {
-      alert("Error adding user");
-      console.error(error);
-    } else {
-      setNewUserEmail("");
+    if (error) alert("Error adding user");
+    else {
+      setNewUserName("");
       fetchTeams();
     }
   };
 
+  // Remove user
+  const handleRemoveUser = async (id) => {
+    if (!window.confirm("Are you sure you want to remove this user?")) return;
+    const { error } = await supabase.from("teams").delete().eq("id", id);
+    if (error) alert("Error removing user");
+    else fetchTeams();
+  };
+
   // CSV export
   const handleExport = (period) => {
-    let filteredTeams = [...teams];
     const now = new Date();
+    let filteredTeams = [...teams];
 
     if (period === "daily") {
       filteredTeams = filteredTeams.filter(
-        (t) => t.break_start && new Date(t.break_start).toDateString() === now.toDateString()
+        (t) =>
+          t.break_start &&
+          new Date(t.break_start).toDateString() === now.toDateString()
       );
     } else if (period === "weekly") {
       const weekAgo = new Date();
@@ -111,7 +106,7 @@ const App = () => {
 
     const csvContent =
       "data:text/csv;charset=utf-8," +
-      ["Name,Break Start,Break End,Duration"].join(",") +
+      ["Name,Break Start,Break End,Duration (sec)"].join(",") +
       "\n" +
       filteredTeams
         .map((t) => {
@@ -128,23 +123,21 @@ const App = () => {
         })
         .join("\n");
 
-    const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `export_${period}.csv`);
+    link.href = encodeURI(csvContent);
+    link.download = `export_${period}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  // Live timers update every second
+  // Live timers
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const interval = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(interval);
   }, []);
 
-  // Format HH:MM:SS
   const formatDuration = (seconds) => {
     const h = Math.floor(seconds / 3600)
       .toString()
@@ -158,6 +151,15 @@ const App = () => {
     return `${h}:${m}:${s}`;
   };
 
+  // Calculate daily total break duration
+  const getDailyBreak = (team) => {
+    if (!team.break_start) return 0;
+    const start = new Date(team.break_start);
+    const end = team.break_end ? new Date(team.break_end) : new Date();
+    if (start.toDateString() !== new Date().toDateString()) return 0;
+    return Math.floor((end - start) / 1000);
+  };
+
   return (
     <div className="p-6 font-sans">
       <h1 className="text-2xl font-bold mb-4">Team Break Dashboard</h1>
@@ -168,31 +170,30 @@ const App = () => {
             <th className="p-2 border">Name</th>
             <th className="p-2 border">On Break</th>
             <th className="p-2 border">Break Duration</th>
+            <th className="p-2 border">Today's Total Break</th>
             <th className="p-2 border">Action</th>
+            {isAdmin && <th className="p-2 border">Remove</th>}
           </tr>
         </thead>
         <tbody>
           {teams.map((team) => {
-            let durationSec = 0;
-            if (team.break_start) {
-              const start = new Date(team.break_start);
-              const end = team.break_end ? new Date(team.break_end) : new Date();
-              durationSec = Math.floor((end - start) / 1000);
-            }
+            const durationSec = team.break_start
+              ? Math.floor(
+                  ((team.break_end ? new Date(team.break_end) : new Date()) -
+                    new Date(team.break_start)) /
+                    1000
+                )
+              : 0;
+            const dailyBreakSec = getDailyBreak(team);
             return (
               <tr
                 key={team.id}
-                className={
-                  team.break_start && durationSec / 60 > LONG_BREAK_MIN
-                    ? "bg-red-100"
-                    : ""
-                }
+                className={team.break_start && durationSec / 60 > LONG_BREAK_MIN ? "bg-red-100" : ""}
               >
                 <td className="p-2 border">{team.name}</td>
-                <td className="p-2 border">
-                  {team.break_start && !team.break_end ? "Yes" : "No"}
-                </td>
+                <td className="p-2 border">{team.break_start && !team.break_end ? "Yes" : "No"}</td>
                 <td className="p-2 border">{formatDuration(durationSec)}</td>
+                <td className="p-2 border">{formatDuration(dailyBreakSec)}</td>
                 <td className="p-2 border">
                   <button
                     className="px-3 py-1 bg-blue-500 text-white rounded"
@@ -201,6 +202,16 @@ const App = () => {
                     {team.break_start && !team.break_end ? "Punch Out" : "Punch In"}
                   </button>
                 </td>
+                {isAdmin && (
+                  <td className="p-2 border">
+                    <button
+                      className="px-3 py-1 bg-red-500 text-white rounded"
+                      onClick={() => handleRemoveUser(team.id)}
+                    >
+                      Remove
+                    </button>
+                  </td>
+                )}
               </tr>
             );
           })}
@@ -225,8 +236,8 @@ const App = () => {
                 <h2 className="text-xl font-bold mb-2">Admin Login</h2>
                 <input
                   type="password"
-                  placeholder="Enter admin password"
-                  className="border p-2 w-full mb-2"
+                  placeholder="Password"
+                  className="border p-2 w-full mb-4"
                   value={adminPassword}
                   onChange={(e) => setAdminPassword(e.target.value)}
                 />
@@ -253,8 +264,8 @@ const App = () => {
                     type="text"
                     placeholder="New User Name"
                     className="border p-2 mr-2"
-                    value={newUserEmail}
-                    onChange={(e) => setNewUserEmail(e.target.value)}
+                    value={newUserName}
+                    onChange={(e) => setNewUserName(e.target.value)}
                   />
                   <button
                     className="px-3 py-2 bg-green-500 text-white rounded"

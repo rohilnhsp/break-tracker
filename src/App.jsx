@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 
 // ---- Supabase Client ----
 const supabaseUrl = "https://ulgagdsllwkqxluakifk.supabase.co";
-const anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk"; // replace with your anon key
+const anonKey = "YOUR_ANON_KEY"; // replace
 const supabase = createClient(supabaseUrl, anonKey);
 
 const breakOptions = [
@@ -46,14 +46,27 @@ function App() {
     }
   };
 
-  // Punch In/Out
+  // Punch In/Out with daily break logic
   const handlePunch = async (teamId, action, breakType = null) => {
     try {
+      const team = teams.find((t) => t.id === teamId);
+      const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+      // Reset daily break if date changed
+      let dailyBreak = team.daily_break_seconds || 0;
+      if (team.last_break_date !== today) dailyBreak = 0;
+
       const updateData = {};
       if (action === "in") updateData.punch_in = new Date().toISOString();
       else if (action === "out") {
         updateData.punch_out = new Date().toISOString();
-        if (breakType) updateData.break_type = breakType;
+        updateData.break_type = breakType;
+        const lastPunch = new Date(team.punch_in || new Date());
+        const durationSec = Math.floor(
+          (new Date().getTime() - lastPunch.getTime()) / 1000
+        );
+        updateData.daily_break_seconds = dailyBreak + durationSec;
+        updateData.last_break_date = today;
       }
 
       const { data, error, status } = await supabase
@@ -120,14 +133,12 @@ function App() {
     }
   };
 
-  // Render loading
   if (loading) return <div>Loading...</div>;
 
   return (
     <div style={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
       <h1 style={{ textAlign: "center" }}>Team Break Tracker</h1>
 
-      {/* Admin button */}
       {!adminLogged && (
         <button
           style={{ position: "absolute", top: 20, right: 20 }}
@@ -156,6 +167,7 @@ function App() {
             <th>Punch In</th>
             <th>Punch Out</th>
             <th>Break Type</th>
+            <th>Today's Break ⏳</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -172,6 +184,7 @@ function App() {
               <td>{team.punch_in ? new Date(team.punch_in).toLocaleTimeString() : "-"}</td>
               <td>{team.punch_out ? new Date(team.punch_out).toLocaleTimeString() : "-"}</td>
               <td>{team.break_type || "—"}</td>
+              <td>{team.daily_break_seconds || 0} sec</td>
               <td>
                 <button onClick={() => handlePunch(team.id, "in")}>⏱️ Punch In</button>
                 <button
@@ -193,7 +206,6 @@ function App() {
         </tbody>
       </table>
 
-      {/* Admin add user */}
       {adminLogged && (
         <div style={{ marginTop: "20px" }}>
           <button

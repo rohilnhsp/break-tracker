@@ -3,12 +3,9 @@ import { createClient } from "@supabase/supabase-js";
 
 // ---- Supabase Client ----
 const supabaseUrl = "https://ulgagdsllwkqxluakifk.supabase.co";
-const anonKey =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk";
-
+const anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ2FnZHNsbHdrcXhsdWFraWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAxNjIzNzgsImV4cCI6MjA3NTczODM3OH0.VzHCWzFaVnYdNBrGMag9rYQBon6cERpUaZCPZH_Nurk";
 const supabase = createClient(supabaseUrl, anonKey);
 
-// Break Types
 const BREAK_TYPES = [
   { label: "Tea ☕", value: "tea" },
   { label: "Lunch 🍴", value: "lunch" },
@@ -24,51 +21,58 @@ export default function App() {
     password: "",
   });
   const [newUserName, setNewUserName] = useState("");
-  const [exportRange, setExportRange] = useState("daily");
-  const [selectedBreaks, setSelectedBreaks] = useState({}); // store selected break per user
+  const [selectedBreaks, setSelectedBreaks] = useState({});
 
-  // Fetch teams/users safely
+  // Format seconds to HH:MM:SS
+  const formatTime = (sec) => {
+    const h = Math.floor(sec / 3600)
+      .toString()
+      .padStart(2, "0");
+    const m = Math.floor((sec % 3600) / 60)
+      .toString()
+      .padStart(2, "0");
+    const s = Math.floor(sec % 60)
+      .toString()
+      .padStart(2, "0");
+    return `${h}:${m}:${s}`;
+  };
+
+  // Fetch users safely
   const fetchTeams = async () => {
     try {
       const { data, error } = await supabase.from("teams").select("*");
-      if (error && error.code !== "PGRST404") {
-        console.error("Error fetching users:", error);
-      } else {
-        setTeams(data || []);
-      }
+      if (error && error.code !== "PGRST404") console.error(error);
+      else setTeams(data || []);
     } catch (err) {
-      console.error("Unexpected fetch error:", err);
+      console.error("Fetch error:", err);
     }
   };
 
   useEffect(() => {
     fetchTeams();
-    const interval = setInterval(() => fetchTeams(), 10000); // refresh every 10s
+    const interval = setInterval(fetchTeams, 10000); // refresh every 10s
     return () => clearInterval(interval);
   }, []);
 
   // Punch In/Out
   const punch = async (user) => {
-    try {
-      const breakType = selectedBreaks[user.id] || null;
-      const now = new Date().toISOString();
-      const updated = {
-        last_punch: now,
-        break_type: breakType,
-        daily_break_seconds: user.daily_break_seconds || 0,
-        last_break_date: user.last_break_date || now,
-      };
+    const breakType = selectedBreaks[user.id] || null;
+    const now = new Date().toISOString();
 
+    const updated = {};
+    if ("last_punch" in user) updated.last_punch = now;
+    if ("break_type" in user) updated.break_type = breakType;
+    if ("daily_break_seconds" in user)
+      updated.daily_break_seconds = (user.daily_break_seconds || 0) + 300; // example +5min
+    if ("last_break_date" in user) updated.last_break_date = now;
+
+    try {
       const { error } = await supabase
         .from("teams")
         .update(updated)
         .eq("id", user.id);
-
-      if (error) {
-        console.error("Error punching in/out:", error);
-      } else {
-        fetchTeams();
-      }
+      if (error) console.error("Error punching in/out:", error);
+      else fetchTeams();
     } catch (err) {
       console.error("Unexpected punch error:", err);
     }
@@ -79,11 +83,9 @@ export default function App() {
     if (
       adminCredentials.username === "admin" &&
       adminCredentials.password === "password"
-    ) {
+    )
       setAdminLogged(true);
-    } else {
-      alert("Invalid credentials");
-    }
+    else alert("Invalid credentials");
   };
 
   // Add user
@@ -93,9 +95,8 @@ export default function App() {
       const { data, error } = await supabase
         .from("teams")
         .insert([{ name: newUserName }]);
-      if (error) {
-        console.error("Error adding user:", error);
-      } else {
+      if (error) console.error("Error adding user:", error);
+      else {
         setTeams((prev) => [...prev, ...(data || [])]);
         setNewUserName("");
       }
@@ -108,42 +109,18 @@ export default function App() {
   const removeUser = async (id) => {
     try {
       const { error } = await supabase.from("teams").delete().eq("id", id);
-      if (error) {
-        console.error("Error removing user:", error);
-      } else {
-        setTeams((prev) => prev.filter((u) => u.id !== id));
-      }
+      if (error) console.error("Error removing user:", error);
+      else setTeams((prev) => prev.filter((u) => u.id !== id));
     } catch (err) {
       console.error("Unexpected remove user error:", err);
     }
-  };
-
-  // Export CSV
-  const exportCSV = (range = "daily") => {
-    const headers = ["Name", "Last Punch", "Break Type", "Daily Break (s)"];
-    const rows = teams.map((u) => [
-      u.name,
-      u.last_punch,
-      u.break_type || "-",
-      u.daily_break_seconds || 0,
-    ]);
-    const csvContent =
-      "data:text/csv;charset=utf-8," +
-      [headers, ...rows].map((e) => e.join(",")).join("\n");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `breaks_${range}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
   };
 
   return (
     <div style={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
       <h1>🕒 Break Tracker Dashboard</h1>
 
-      {/* Admin Toggle */}
+      {/* Admin toggle */}
       <button
         onClick={() => setAdminLogged((prev) => !prev)}
         style={{ marginBottom: "10px" }}
@@ -163,19 +140,12 @@ export default function App() {
       )}
 
       {/* Table */}
-      <div
-        style={{
-          overflowX: "auto",
-          maxWidth: "100%",
-          border: "1px solid #ddd",
-          borderRadius: "5px",
-        }}
-      >
+      <div style={{ overflowX: "auto", maxWidth: "100%" }}>
         <table
           style={{
             width: "100%",
             borderCollapse: "collapse",
-            minWidth: "600px",
+            minWidth: "650px",
           }}
         >
           <thead>
@@ -190,7 +160,7 @@ export default function App() {
               <th style={{ padding: "10px" }}>Name</th>
               <th>Last Punch</th>
               <th>Break Type</th>
-              <th>Daily Break (s)</th>
+              <th>Daily Break</th>
               {adminLogged && <th>Actions</th>}
               <th>Punch</th>
             </tr>
@@ -209,7 +179,7 @@ export default function App() {
                   <td style={{ padding: "8px" }}>{user.name}</td>
                   <td>{user.last_punch || "-"}</td>
                   <td>{user.break_type || "-"}</td>
-                  <td>{user.daily_break_seconds || 0}</td>
+                  <td>{formatTime(user.daily_break_seconds || 0)}</td>
                   {adminLogged && (
                     <td>
                       <button onClick={() => removeUser(user.id)}>❌ Remove</button>
@@ -235,8 +205,8 @@ export default function App() {
                       ))}
                     </select>
                     <button
-                      onClick={() => punch(user)}
                       style={{ marginLeft: "5px" }}
+                      onClick={() => punch(user)}
                     >
                       ⏱ Punch
                     </button>
@@ -247,15 +217,6 @@ export default function App() {
           </tbody>
         </table>
       </div>
-
-      {/* Export */}
-      {adminLogged && (
-        <div style={{ marginTop: "20px" }}>
-          <button onClick={() => exportCSV("daily")}>Export Daily</button>
-          <button onClick={() => exportCSV("weekly")}>Export Weekly</button>
-          <button onClick={() => exportCSV("monthly")}>Export Monthly</button>
-        </div>
-      )}
     </div>
   );
 }

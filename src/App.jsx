@@ -8,33 +8,57 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const App = () => {
   const [users, setUsers] = useState([]);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [breakType, setBreakType] = useState("Tea Break");
   const [loading, setLoading] = useState(false);
 
-  // ✅ Fetch users (gracefully handles 404/400)
+  // ✅ Fetch all users
   const fetchUsers = async () => {
     try {
       const { data, error, status } = await supabase.from("teams").select("*");
       if (error && status !== 406) throw error;
       setUsers(data || []);
-    } catch (error) {
-      console.warn("Fetch error:", error.message);
+    } catch (err) {
+      console.warn("Fetch error:", err.message);
       setUsers([]);
     }
   };
 
-  // ✅ Punch In/Out toggle
+  // ✅ Add User (Admin)
+  const addUser = async () => {
+    const name = prompt("Enter user name:");
+    if (!name) return;
+    try {
+      const { error } = await supabase.from("teams").insert([{ name }]);
+      if (error) throw error;
+      fetchUsers();
+    } catch (err) {
+      console.error("Add user error:", err.message);
+    }
+  };
+
+  // ✅ Remove User (Admin)
+  const removeUser = async (id) => {
+    if (!window.confirm("Remove this user?")) return;
+    try {
+      const { error } = await supabase.from("teams").delete().eq("id", id);
+      if (error) throw error;
+      fetchUsers();
+    } catch (err) {
+      console.error("Remove error:", err.message);
+    }
+  };
+
+  // ✅ Punch In/Out
   const handlePunch = async (user) => {
     try {
       setLoading(true);
-      const active = !user.end_time; // if end_time missing = on break
-      if (active) {
+      const onBreak = user.start_time && !user.end_time;
+
+      if (onBreak) {
         // Punch out
         const { error } = await supabase
           .from("teams")
           .update({
             end_time: new Date().toISOString(),
-            break_type: breakType,
           })
           .eq("id", user.id);
         if (error) throw error;
@@ -45,89 +69,91 @@ const App = () => {
           .update({
             start_time: new Date().toISOString(),
             end_time: null,
-            break_type: breakType,
           })
           .eq("id", user.id);
         if (error) throw error;
       }
+
       fetchUsers();
-    } catch (error) {
-      console.error("Error punching in/out:", error);
+    } catch (err) {
+      console.error("Punch error:", err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // ✅ Add User (Admin only)
-  const addUser = async () => {
-    const name = prompt("Enter user name:");
-    if (!name) return;
+  // ✅ Update Break Type (only when not active)
+  const handleBreakTypeChange = async (user, newType) => {
+    if (user.start_time && !user.end_time) return; // prevent mid-break change
     try {
-      const { error } = await supabase.from("teams").insert([{ name }]);
+      const { error } = await supabase
+        .from("teams")
+        .update({ break_type: newType })
+        .eq("id", user.id);
       if (error) throw error;
       fetchUsers();
-    } catch (error) {
-      console.error("Error adding user:", error.message);
+    } catch (err) {
+      console.error("Break type update error:", err.message);
     }
   };
 
-  // ✅ Remove User (Admin only)
-  const removeUser = async (id) => {
-    if (!window.confirm("Remove this user?")) return;
-    try {
-      const { error } = await supabase.from("teams").delete().eq("id", id);
-      if (error) throw error;
-      fetchUsers();
-    } catch (error) {
-      console.error("Error removing user:", error.message);
-    }
+  // ✅ Calculate duration (HH:MM:SS)
+  const getDuration = (start, end) => {
+    if (!start) return 0;
+    const startTime = new Date(start);
+    const endTime = end ? new Date(end) : new Date();
+    return Math.floor((endTime - startTime) / 1000);
   };
 
-  // ✅ Export CSV (Admin)
+  // ✅ Format duration to HH:MM:SS
+  const formatDuration = (seconds) => {
+    const h = String(Math.floor(seconds / 3600)).padStart(2, "0");
+    const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
+    const s = String(seconds % 60).padStart(2, "0");
+    return `${h}:${m}:${s}`;
+  };
+
+  // ✅ Get today's total duration (all completed breaks)
+  const getTodayDuration = (user) => {
+    if (!user.start_time) return 0;
+    const start = new Date(user.start_time);
+    const end = user.end_time ? new Date(user.end_time) : new Date();
+    const sameDay =
+      new Date().toDateString() === new Date(start).toDateString();
+    return sameDay ? getDuration(user.start_time, user.end_time) : 0;
+  };
+
+  // ✅ Export CSV
   const exportCSV = () => {
     const csvRows = [
-      ["Name", "Break Type", "Start Time", "End Time", "Duration"],
+      ["Name", "Break Type", "Current Break", "Daily Total"],
       ...users.map((u) => [
         u.name,
         u.break_type || "-",
-        u.start_time ? new Date(u.start_time).toLocaleTimeString() : "-",
-        u.end_time ? new Date(u.end_time).toLocaleTimeString() : "-",
-        getDuration(u.start_time, u.end_time),
+        formatDuration(getDuration(u.start_time, u.end_time)),
+        formatDuration(getTodayDuration(u)),
       ]),
     ];
     const blob = new Blob([csvRows.map((r) => r.join(",")).join("\n")], {
       type: "text/csv",
     });
-    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = "break_data.csv";
+    a.href = URL.createObjectURL(blob);
+    a.download = "break_tracker.csv";
     a.click();
   };
 
-  // ✅ Calculate duration (HH:MM:SS)
-  const getDuration = (start, end) => {
-    if (!start) return "-";
-    const startTime = new Date(start);
-    const endTime = end ? new Date(end) : new Date();
-    const diff = Math.floor((endTime - startTime) / 1000);
-    const hrs = String(Math.floor(diff / 3600)).padStart(2, "0");
-    const mins = String(Math.floor((diff % 3600) / 60)).padStart(2, "0");
-    const secs = String(diff % 60).padStart(2, "0");
-    return `${hrs}:${mins}:${secs}`;
-  };
-
-  // ✅ Admin login
+  // ✅ Admin Login
   const handleAdminLogin = () => {
     const pass = prompt("Enter admin password:");
     if (pass === "admin123") setIsAdmin(true);
     else alert("Incorrect password!");
   };
 
-  // Live refresh
+  // ⏱️ Live refresh
   useEffect(() => {
     fetchUsers();
-    const interval = setInterval(fetchUsers, 5000);
+    const interval = setInterval(fetchUsers, 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -166,18 +192,22 @@ const App = () => {
         <table className="min-w-full bg-white border border-gray-200 rounded-lg shadow-md text-center">
           <thead className="bg-gray-100 text-gray-700">
             <tr>
-              <th className="p-3">Name</th>
-              <th className="p-3">Break Type</th>
-              <th className="p-3">Start</th>
-              <th className="p-3">End</th>
-              <th className="p-3">Duration</th>
-              <th className="p-3">Action</th>
-              {isAdmin && <th className="p-3">Remove</th>}
+              <th className="p-3">👤 Name</th>
+              <th className="p-3">🕒 Current Break</th>
+              <th className="p-3">📅 Daily Total</th>
+              <th className="p-3">🧾 Type</th>
+              <th className="p-3">⚡ Action</th>
+              {isAdmin && <th className="p-3">❌ Remove</th>}
             </tr>
           </thead>
           <tbody>
             {users.map((u) => {
               const onBreak = u.start_time && !u.end_time;
+              const currDuration = formatDuration(
+                getDuration(u.start_time, u.end_time)
+              );
+              const totalDuration = formatDuration(getTodayDuration(u));
+
               return (
                 <tr
                   key={u.id}
@@ -186,10 +216,15 @@ const App = () => {
                   }`}
                 >
                   <td className="p-3 font-medium">{u.name}</td>
+                  <td className="p-3 font-mono">{currDuration}</td>
+                  <td className="p-3 font-mono">{totalDuration}</td>
                   <td className="p-3">
                     <select
-                      value={u.break_type || breakType}
-                      onChange={(e) => setBreakType(e.target.value)}
+                      value={u.break_type || "☕ Tea Break"}
+                      disabled={onBreak}
+                      onChange={(e) =>
+                        handleBreakTypeChange(u, e.target.value)
+                      }
                       className="border rounded-md p-1"
                     >
                       <option>☕ Tea Break</option>
@@ -197,19 +232,6 @@ const App = () => {
                       <option>🍔 Dinner</option>
                       <option>🚻 Bio Break</option>
                     </select>
-                  </td>
-                  <td className="p-3">
-                    {u.start_time
-                      ? new Date(u.start_time).toLocaleTimeString()
-                      : "-"}
-                  </td>
-                  <td className="p-3">
-                    {u.end_time
-                      ? new Date(u.end_time).toLocaleTimeString()
-                      : "-"}
-                  </td>
-                  <td className="p-3 font-mono">
-                    {getDuration(u.start_time, u.end_time)}
                   </td>
                   <td className="p-3">
                     <button
